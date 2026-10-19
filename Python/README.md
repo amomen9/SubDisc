@@ -1,10 +1,10 @@
 # SubDisc in Python
 
-This folder is my Python port of SubDisc (Subgroup Discovery, the tool that used to be called Cortana). The Java desktop application lives in **../Java** and I kept it there as is. The goal of the port: same subgroups, same qualities and same result files as the Java version, with a Qt user interface on top.
+This folder is our Python port of SubDisc (Subgroup Discovery, the tool that used to be called Cortana). The Java desktop application lives in **../Java** and We kept it there as is. The goal of the port: same subgroups, same qualities and same result files as the Java version, with a Qt user interface on top.
 
 ## What is needed
 
-- Python 3.10 or newer (I run it on 3.14, global interpreter, no virtual environment)
+- Python 3.10 or newer (We run it on 3.14, global interpreter, no virtual environment)
 - numpy
 - PySide6 (the GUI)
 - matplotlib (the charts in the GUI)
@@ -37,16 +37,16 @@ Data files are the same as for Java: .txt / .csv (comma, tab or semicolon), .arf
 
 ## The GUI
 
-It is PySide6 with a flat light look close to the FlatLaf IntelliJ theme the Java version uses (there is a dark one under View). The windows, buttons, menus, keyboard shortcuts and the order in which the fields update are the same as in Java. Things I changed on purpose:
+It is PySide6 with a flat light look close to the FlatLaf IntelliJ theme the Java version uses (there is a dark one under View). The windows, buttons, menus, keyboard shortcuts and the order in which the fields update are the same as in Java. Things We changed on purpose:
 
 - mining, loading a file, cross-validation and computing random qualities run on a background thread with a small progress dialog. The Stop button (or Escape) ends a mining run and shows the result so far, same as in Java
 - the progress line ("d=2 cands=1.234 evaluating: ...") is in the title bar like in Java and also in the status bar
 - the charts are matplotlib, so zoom, pan and save as image come with the toolbar
 - the ROC window computes the quality isometrics one time and keeps them, resizing is instant
 
-## How I checked it is the same
+## How We checked that it is the same
 
-I compiled the Java source from **../Java/src** (the jar in **../Java/target** is older than the source, revision 1140 against 1161, and it gives different results on data with missing values) and ran the same settings through Java and through the port, then compared the result files byte for byte. Identical for:
+We compiled the Java source from **../Java/src** (the jar in **../Java/target** is older than the source, revision 1140 against 1161, and it gives different results on data with missing values) and ran the same settings through Java and through the port, then compared the result files byte for byte. Identical for:
 
 - single nominal: 19 settings, all search strategies (beam, ROC beam, cover based beam selection, best / depth / breadth first), all numeric strategies, value sets, intervals, minimum support and filtering
 - single numeric: 12 settings, also with missing values
@@ -54,7 +54,7 @@ I compiled the Java source from **../Java/src** (the jar in **../Java/target** i
 - multi-label 2 (with the same fixed random seed on both sides)
 - label ranking 7, multi-numeric 4
 
-On my machine the port is about 1 to 5 times slower than Java.
+On our machine the port is about 1 to 5 times slower than Java. This is partly because Java is a compiled language, whereas Python is an interpreted language.
 
 The tests: **python -m pytest tests** (they read the data files from **../Java/src/test/resources**).
 
@@ -62,10 +62,10 @@ The tests: **python -m pytest tests** (they read the data files from **../Java/s
 
 On purpose, and only where Java crashes, hangs or the GUI loses what the user typed:
 
-- the search runs on one thread. Java with 1 thread gives the same result as Java with more threads, and that is what I compared against
+- the search runs on one thread. Java with 1 thread gives the same result as Java with more threads, and that is what We compared against
 - the propensity score measures use a logistic regression. Java uses Weka for that; here it is a plain maximum likelihood fit with numpy, so the last digits can differ. These measures are hidden in the Java GUI anyway ("not implemented")
 - Validation could loop forever in Java (a nextSetBit(k) that never moves on), fixed
-- crashes I avoided: lines with too few fields in a .txt file (now missing values), changing a column type in some corner cases, a null ConditionBase in the external knowledge loader
+- crashes We avoided: lines with too few fields in a .txt file (now missing values), changing a column type in some corner cases, a null ConditionBase in the external knowledge loader
 - the loaders close the columns at the end. Java keeps the grown arrays (its loops only look at the row count), numpy needs the exact length. Results are the same
 - main window: selecting a subset or changing the meta data no longer resets the target type, target and quality measure. Loading an xml file now also restores minimum support, filter subgroups and minimum improvement, and the target value of the right attribute
 - the subset dialog gives binary columns a 0 / 1 choice (Java shows an empty box there)
