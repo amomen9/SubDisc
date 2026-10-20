@@ -6,10 +6,9 @@ import os
 import time
 
 import numpy as np
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut, QTextDocument
-from PySide6.QtWidgets import (QAbstractItemView, QInputDialog, QMessageBox,
-                               QTableView, QTabWidget)
+from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLabel, QMessageBox, QTabWidget
 
 from .. import log
 from .. import probability_density_function as pdfm
@@ -31,54 +30,75 @@ from .label_ranking_matrix_window import LabelRankingMatrixWindow
 from .model_window import ModelWindow
 from .pdf_window_2d import PDFWindow2D
 from .roc_curve_window import ROCCurveWindow
+from .table_filter import FilterSortModel, FilterTableView
 
 
 def create_title(subgroup):
     return "Subgroup %d (%s)" % (subgroup.get_id(), subgroup)
 
 
-class ResultTableModel(QAbstractTableModel):
+class ResultTableModel(FilterSortModel):
     def __init__(self, subgroup_set, target_type):
         super().__init__()
         self._set = subgroup_set
         self._tt = target_type
-        self._items = list(subgroup_set)
+        self._items = []
+        self.rebuild()
 
     def items(self):
+        """all subgroups, in the order of the set"""
         return self._items
 
+    def visible_items(self):
+        """the subgroups the filters leave, in the order shown"""
+        return [self._items[r] for r in self._rows]
+
     def refresh(self):
-        self.beginResetModel()
+        self.rebuild()
+
+    def source_rows(self):
         self._items = list(self._set)
-        self.endResetModel()
+        return range(len(self._items))
 
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self._items)
+    def column_count(self):
+        return rtm.COLUMN_COUNT
 
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else rtm.COLUMN_COUNT
+    def header(self, col):
+        return rtm.get_column_name(col, self._tt)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
-            return rtm.get_column_name(section, self._tt)
-        return None
+    def display(self, src, col):
+        return str(rtm.get_value(self._items[src], col, self._tt))
 
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid():
-            return None
-        if role == Qt.DisplayRole:
-            v = rtm.get_value(self._items[index.row()], index.column(), self._tt)
-            return str(v)
-        if role == Qt.TextAlignmentRole and index.column() in (0, 1, 2, 3, 5, 6):
+    def raw(self, src, col):
+        s = self._items[src]
+        if col == 0:
+            return s.get_id()
+        if col == 1:
+            return s.get_depth()
+        if col == 2:
+            return s.get_coverage()
+        if col == 3:
+            return float(s.get_measure_value())
+        if col == 4:
+            if self._tt == TargetType.LABEL_RANKING:
+                return self.display(src, col)
+            return float(s.get_secondary_statistic())
+        if col == 5:
+            return float(s.get_tertiary_statistic())
+        if col == 6:
+            return float(s.get_p_value())   # NaN ('-') sorts last
+        return self.display(src, col)
+
+    def cell_role(self, src, col, role):
+        if role == Qt.TextAlignmentRole and col in (0, 1, 2, 3, 5, 6):
             return int(Qt.AlignRight | Qt.AlignVCenter)
-        if role == Qt.TextAlignmentRole and index.column() == 4 and self._tt != TargetType.LABEL_RANKING:
+        if role == Qt.TextAlignmentRole and col == 4 and self._tt != TargetType.LABEL_RANKING:
             return int(Qt.AlignRight | Qt.AlignVCenter)
         return None
 
 
 def _result_view(model):
-    v = QTableView()
-    v.setModel(model)
+    v = FilterTableView(model)
     v.setSelectionBehavior(QAbstractItemView.SelectRows)
     v.setSelectionMode(QAbstractItemView.ExtendedSelection)
     v.setAlternatingRowColors(True)
@@ -88,8 +108,10 @@ def _result_view(model):
     unit = int(0.05 * common.WINDOW_DEFAULT_SIZE.width())
     for c, f in enumerate((1, 1, 1.75, 1.75, 1.75, 1.75, 2, 9)):
         v.setColumnWidth(c, int(f * unit))
+    v.fit_headings()
     v.horizontalHeader().setStretchLastSection(True)
-    # sorting stays off, it would destroy the order of the subgroups
+    # java has no sorting here; the header sorts the view only, the set and
+    # the 'Nr.' column keep the original order
     return v
 
 
@@ -111,6 +133,12 @@ class ResultWindow(common.Window):
         self._model = ResultTableModel(self._set, tt)
         self._view = _result_view(self._model)
         self.content().addWidget(self._view, 1)
+        # 'Showing 5 of 16 subgroups ...', only while a filter is on
+        self._filter_info = QLabel()
+        self._filter_info.setStyleSheet("color: palette(highlight);")
+        self._filter_info.setVisible(False)
+        self.content().addWidget(self._filter_info)
+        self._model.filtersChanged.connect(self._filters_changed)
         if len(self._model.items()) > 0:
             self._view.selectRow(0)
         self._view.doubleClicked.connect(lambda _i: self._enter())
@@ -180,11 +208,45 @@ class ResultWindow(common.Window):
         self._roc.setVisible(tt == TargetType.SINGLE_NOMINAL)
 
     def _selected_rows(self):
-        return sorted({i.row() for i in self._view.selectionModel().selectedRows()})
+        """source rows (positions in the set) of the selected table rows"""
+        return self._view.selected_source_rows()
 
     def _selected_subgroups(self):
         items = self._model.items()
         return [items[r] for r in self._selected_rows()]
+
+    # ------------------------------------------------------------------
+    # filtering (not in java): ROC, Pattern Team, Save, Print and the
+    # p-value buttons only use the subgroups that are still shown
+    # ------------------------------------------------------------------
+
+    def _filters_changed(self):
+        m = self._model
+        if m.is_filtered():
+            self._filter_info.setText("Showing %d of %d subgroups, filter: %s.   ROC, Pattern Team, Save, Print and the "
+                                      "p-values use only these." % (m.rowCount(), len(m.items()), m.describe_filters()))
+            self._filter_info.setVisible(True)
+        else:
+            self._filter_info.setVisible(False)
+        if self._view.selectionModel() is not None and not self._view.selectionModel().hasSelection():
+            self._view.select_first()
+
+    def _visible_set(self):
+        """the subgroup set itself without a filter, otherwise a copy that
+        holds only the subgroups shown"""
+        if not self._model.is_filtered():
+            return self._set
+        s = self._set._empty_copy()
+        for g in self._model.visible_items():
+            s.add(g)
+        return s
+
+    def _visible_or_warn(self, what):
+        s = self._visible_set()
+        if len(s) == 0:
+            QMessageBox.information(self, what, "The filter leaves no subgroups.")
+            return None
+        return s
 
     # ------------------------------------------------------------------
     # show model
@@ -298,18 +360,26 @@ class ResultWindow(common.Window):
     # ------------------------------------------------------------------
 
     def _roc_clicked(self):
-        ROCCurveWindow(self._set, self._sp, self._qm)
+        s = self._visible_or_warn("ROC")
+        if s is None:
+            return
+        w = ROCCurveWindow(s, self._sp, self._qm)
+        if s is not self._set:
+            w.setWindowTitle(w.windowTitle() + "  [filtered: %d of %d subgroups]" % (len(s), len(self._set)))
 
     def _pattern_team_clicked(self):
+        source = self._visible_or_warn("Pattern Team")
+        if source is None:
+            return
         text, ok = QInputDialog.getText(self, "Input", "Set pattern team size:")
         if not ok or text == "":
             return
         common.set_busy(True)
         try:
             k = int(text.strip())
-            team = self._set.get_pattern_team(self._table, k)
+            team = source.get_pattern_team(self._table, k)
             ResultWindow.pattern_team_window(self, team)
-            grouping = self._set.get_grouping(team)
+            grouping = source.get_grouping(team)
             PatternTeamTabWindow(grouping, self._sp)
         except Exception as e:
             log.log_command_line(str(e))
@@ -329,9 +399,9 @@ class ResultWindow(common.Window):
             self._set.remove(s)
         self._model.refresh()
         self._view.clearSelection()
-        if len(self._set) > 0:
+        if self._model.rowCount() > 0:
             self._view.selectRow(0)
-        else:
+        if len(self._set) == 0:
             self._delete.setEnabled(False)
 
     def _random_qualities(self, then):
@@ -349,34 +419,49 @@ class ResultWindow(common.Window):
                               lambda q: q is not None and then(q)).start()
 
     def _p_values_clicked(self):
+        target = self._visible_or_warn("Gaussian p-Values")
+        if target is None:
+            return
+
         def done(q):
             d = NormalDistribution(q)
-            for s in self._set:
+            for s in target:
                 s.set_p_value(d)
-            self._view.viewport().update()
+            self._model.refresh()
         self._random_qualities(done)
 
     def _regression_clicked(self):
+        target = self._visible_or_warn("Regression Test")
+        if target is None:
+            return
+
         def done(q):
-            score = Validation.perform_regression_test(q, self._set)
+            score = Validation.perform_regression_test(q, target)
             QMessageBox.information(self, "Message", "The regression test score equals\nfor k =  1 : %s\nfor k = 10 : %s"
                                     % (double_to_string(score[0]), double_to_string(score[1])))
         self._random_qualities(done)
 
     def _empirical_clicked(self):
+        target = self._visible_or_warn("Empirical p-Values")
+        if target is None:
+            return
+
         def done(q):
-            p = Validation.compute_empirical_p_value(q, self._set)
+            p = Validation.compute_empirical_p_value(q, target)
             QMessageBox.information(self, "Message", "The empirical p-value is p = " + double_to_string(p))
-            for s in self._set:
+            for s in target:
                 s.set_empirical_p_value(q)
-            self._view.viewport().update()
+            self._model.refresh()
         self._random_qualities(done)
 
     def _save_clicked(self):
+        target = self._visible_or_warn("Save")
+        if target is None:
+            return
         path = ui_hooks.choose_save_file(FileType.ALL_DATA_FILES)
         if path is None:
             return   # cancelled
-        xml_save(self._set, os.path.abspath(path), self._sp.get_target_type())
+        xml_save(target, os.path.abspath(path), self._sp.get_target_type())
 
     def _print_clicked(self):
         from PySide6.QtPrintSupport import QPrintDialog, QPrinter
@@ -386,7 +471,7 @@ class ResultWindow(common.Window):
             return
         tt = self._sp.get_target_type()
         rows = ["<tr>" + "".join("<th>%s</th>" % _esc(rtm.get_column_name(c, tt)) for c in range(rtm.COLUMN_COUNT)) + "</tr>"]
-        for s in self._model.items():
+        for s in self._model.visible_items():   # as shown: filtered and sorted
             rows.append("<tr>" + "".join("<td>%s</td>" % _esc(str(rtm.get_value(s, c, tt))) for c in range(rtm.COLUMN_COUNT)) + "</tr>")
         doc = QTextDocument()
         doc.setHtml("<table border='1' cellspacing='0' cellpadding='2'>%s</table>" % "".join(rows))

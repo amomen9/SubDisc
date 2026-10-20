@@ -2,98 +2,162 @@
 
 The header shows the column name and its number of distinct values. For a
 nominal target the rows of a subgroup that are not positives get a red
-background. Clicking a header sorts on that column.
+background. Clicking a header sorts on that column, the arrow at its right
+end filters (see table_filter.py).
 """
 
 import numpy as np
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QFontMetrics
-from PySide6.QtWidgets import QAbstractItemView, QComboBox, QTableView
+from PySide6.QtWidgets import QAbstractItemView, QComboBox
 
 from .. import log
 from ..attribute_type import AttributeType
 from . import common
+from .table_filter import FilterSortModel, FilterTableView, match, parse_number, sort_key
 
 
-class BrowseTableModel(QAbstractTableModel):
+class BrowseTableModel(FilterSortModel):
     def __init__(self, table, members=None, true_positives=None):
         super().__init__()
         self._table = table
         self._members = members
         self._tp = true_positives
-        n = table.get_nr_rows()
-        if members is None:
-            self._rows = np.arange(n)
-        else:
-            self._rows = np.flatnonzero(np.asarray(members[:n], dtype=bool))
         self._red = QBrush(common.RED)
+        self.rebuild()
 
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else int(self._rows.shape[0])
+    def source_rows(self):
+        n = self._table.get_nr_rows()
+        if self._members is None:
+            return np.arange(n)
+        return np.flatnonzero(np.asarray(self._members[:n], dtype=bool))
 
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else self._table.get_nr_columns()
+    def column_count(self):
+        return self._table.get_nr_columns()
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role != Qt.DisplayRole:
-            return None
-        if orientation == Qt.Horizontal:
-            c = self._table.get_column(section)
-            return "%s\n(%d distinct)" % (c.get_name(), c.get_cardinality())
-        return str(int(self._rows[section]) + 1)
+    def header(self, col):
+        c = self._table.get_column(col)
+        return "%s\n(%d distinct)" % (c.get_name(), c.get_cardinality())
 
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid():
-            return None
-        row = int(self._rows[index.row()])
-        if role == Qt.DisplayRole:
-            c = self._table.get_column(index.column())
-            t = c.get_type()
-            if t == AttributeType.NOMINAL:
-                return c.get_nominal(row)
-            if t in (AttributeType.NUMERIC, AttributeType.ORDINAL):
-                return common.number(c.get_float(row))
-            if t == AttributeType.BINARY:
-                if c.get_missing(row):
-                    return "?"
-                return "1" if c.get_binary(row) else "0"
-            log.log_command_line("BrowseTableModel.getValueAt(%d, %d), Unknown AttributeType: %s" % (row, index.column(), t))
-            return None
+    def vertical_header(self, src):
+        return str(int(src) + 1)
+
+    def display(self, src, col):
+        c = self._table.get_column(col)
+        row = int(src)
+        t = c.get_type()
+        if t == AttributeType.NOMINAL:
+            return c.get_nominal(row)
+        if t in (AttributeType.NUMERIC, AttributeType.ORDINAL):
+            return common.number(c.get_float(row))
+        if t == AttributeType.BINARY:
+            if c.get_missing(row):
+                return "?"
+            return "1" if c.get_binary(row) else "0"
+        log.log_command_line("BrowseTableModel.getValueAt(%d, %d), Unknown AttributeType: %s" % (row, col, t))
+        return None
+
+    def raw(self, src, col):
+        c = self._table.get_column(col)
+        row = int(src)
+        t = c.get_type()
+        if t in (AttributeType.NUMERIC, AttributeType.ORDINAL):
+            return float(c.get_float(row))
+        if t == AttributeType.BINARY:
+            return None if c.get_missing(row) else (1 if c.get_binary(row) else 0)
+        return c.get_nominal(row)
+
+    def cell_role(self, src, col, role):
         if role == Qt.TextAlignmentRole:
-            c = self._table.get_column(index.column())
-            if c.get_type() == AttributeType.NUMERIC:
+            if self._table.get_column(col).get_type() == AttributeType.NUMERIC:
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             return None
         if role == Qt.BackgroundRole:
-            if self._tp is not None and not self._tp[row]:
+            if self._tp is not None and not self._tp[int(src)]:
                 return self._red
-            return None
         return None
 
-    def sort(self, column, order=Qt.AscendingOrder):
-        if column < 0:
-            return
-        c = self._table.get_column(column)
-        n = self._table.get_nr_rows()
-        t = c.get_type()
-        if t == AttributeType.NOMINAL:
-            keys = np.array([c.get_nominal(int(r)) for r in self._rows], dtype=object)
-            idx = sorted(range(len(keys)), key=lambda i: keys[i])
-            idx = np.asarray(idx, dtype=np.int64)
-        elif t == AttributeType.BINARY:
-            keys = c.binaries_view()[:n][self._rows].astype(np.int8)
-            idx = np.argsort(keys, kind="stable")
+    # numpy versions, the data can have many rows
+    def _states(self, c, rows):
+        """for nominal and binary columns: a small code per row plus, per
+        code, its (raw, display) pair"""
+        n = c.size()
+        if c.get_type() == AttributeType.NOMINAL:
+            codes = c.nominal_codes_view()[:n][rows]
+            return codes, [(v, v) for v in c.distinct_values()]
+        b = c.binaries_view()[:n][rows].astype(np.int64)
+        miss = c.missing_view()[:n][rows]
+        return np.where(miss, 2, b), [(0, "0"), (1, "1"), (None, "?")]
+
+    def filter_rows(self, rows, col, op, text):
+        rows = np.asarray(rows, dtype=np.int64)
+        c = self._table.get_column(col)
+        if c.get_type() in (AttributeType.NOMINAL, AttributeType.BINARY):
+            codes, states = self._states(c, rows)
+            if not states:
+                return rows[:0]
+            lut = np.array([match(r, d, op, text) for r, d in states], dtype=bool)
+            return rows[lut[codes]]
+        n = c.size()
+        vals = c.floats_view()[:n][rows].astype(np.float64)
+        tn = parse_number(text)
+        if op in ("include", "exclude") or tn is None:
+            keep = np.array([match(float(v), common.number(v), op, text) for v in vals], dtype=bool)
+            return rows[keep] if rows.size else rows
+        with np.errstate(invalid="ignore"):
+            if op == "=":
+                keep = np.abs(vals - tn) < 5e-7   # as shown, 6 decimals
+            elif op == ">":
+                keep = vals > tn
+            elif op == "<":
+                keep = vals < tn
+            elif op == ">=":
+                keep = vals >= tn
+            else:
+                keep = vals <= tn
+        return rows[keep]
+
+    def sort_rows(self, rows, col, descending):
+        rows = np.asarray(rows, dtype=np.int64)
+        c = self._table.get_column(col)
+        if c.get_type() in (AttributeType.NOMINAL, AttributeType.BINARY):
+            codes, states = self._states(c, rows)
+            if not states:
+                return rows
+            # rank of every state, text ignoring case, '?' gets NaN (last)
+            order = sorted(range(len(states)), key=lambda i: sort_key(states[i][0]))
+            rank = np.empty(len(states), dtype=np.float64)
+            for k, i in enumerate(order):
+                rank[i] = np.nan if sort_key(states[i][0])[0] == 2 else k
+            keys = rank[codes]
         else:
-            keys = c.floats_view()[:n][self._rows]
-            idx = np.argsort(keys, kind="stable")
-        if order == Qt.DescendingOrder:
-            idx = idx[::-1]
-        self.layoutAboutToBeChanged.emit()
-        self._rows = self._rows[idx]
-        self.layoutChanged.emit()
+            n = c.size()
+            keys = c.floats_view()[:n][rows].astype(np.float64)
+        empty = np.isnan(keys)
+        valid = np.flatnonzero(~empty)
+        if descending:
+            # equal keys keep their original order
+            idx = valid[np.argsort(-keys[valid], kind="stable")]
+        else:
+            idx = valid[np.argsort(keys[valid], kind="stable")]
+        return np.concatenate([rows[idx], rows[empty]])
+
+    def distinct_texts(self, col, limit=500):
+        c = self._table.get_column(col)
+        if c.get_type() == AttributeType.NOMINAL:
+            return sorted(c.get_domain(), key=str.lower)[:limit]
+        if c.get_type() == AttributeType.BINARY:
+            return ["0", "1", "?"]
+        return []
+
+    def visible_mask(self):
+        """the rows shown, as a mask over the table"""
+        m = np.zeros(self._table.get_nr_rows(), dtype=bool)
+        m[np.asarray(self._rows, dtype=np.int64)] = True
+        return m
 
 
-class BrowseJTable(QTableView):
+class BrowseJTable(FilterTableView):
     def __init__(self, table, subgroup=None):
         super().__init__()
         members = None
@@ -107,8 +171,6 @@ class BrowseJTable(QTableView):
         self.setModel(BrowseTableModel(table, members, tp))
         self.setSelectionBehavior(QAbstractItemView.SelectColumns)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self.setSortingEnabled(True)
         self.verticalHeader().setDefaultSectionSize(22)
         self.horizontalHeader().setMinimumHeight(40)
         fm = QFontMetrics(self.horizontalHeader().font())
@@ -116,6 +178,7 @@ class BrowseJTable(QTableView):
         for i in range(table.get_nr_columns()):
             w = fm.horizontalAdvance(table.get_column(i).get_name()) + 16
             self.setColumnWidth(i, max(w, w91))
+        self.fit_headings()   # room for the sort and filter arrows
 
     def focus_column(self, model_index):
         if model_index < 0 or model_index >= self.model().columnCount():
@@ -164,7 +227,9 @@ class BrowseWindow(common.Window):
         self.show_at(100, 100, common.WINDOW_DEFAULT_SIZE)
 
     def _save(self):
-        self._table.to_file(self._members)
+        m = self._jtable.model()
+        # with a filter on, only the rows shown are saved
+        self._table.to_file(m.visible_mask() if m.is_filtered() else self._members)
 
     def _update_columns_box(self):
         text = self._box.currentText()

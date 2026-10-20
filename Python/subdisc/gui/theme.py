@@ -60,6 +60,8 @@ QHeaderView::section {{
     border-right: 1px solid {border}; border-bottom: 1px solid {border};
     padding: 3px 6px;
 }}
+QHeaderView::section:horizontal {{ padding-right: 32px; }}
+QHeaderView::up-arrow, QHeaderView::down-arrow {{ image: none; width: 0px; height: 0px; }}
 QTabWidget::pane {{ border: 1px solid {border}; border-radius: 4px; }}
 QTabBar::tab {{ padding: 5px 12px; border: none; }}
 QTabBar::tab:selected {{ border-bottom: 2px solid {accent}; }}

@@ -43,6 +43,9 @@ It is PySide6 with a flat light look close to the FlatLaf IntelliJ theme the Jav
 - the progress line ("d=2 cands=1.234 evaluating: ...") is in the title bar like in Java and also in the status bar
 - the charts are matplotlib, so zoom, pan and save as image come with the toolbar
 - the ROC window computes the quality isometrics one time and keeps them, resizing is instant
+- every table with column headings can be sorted and filtered (result window, pattern team tabs, browse, meta data, the ROC table, the cross table). A click on a heading sorts on that column: ascending, then descending, then back to the original order. The small arrow at the right end of a heading opens a filter with a value box and =, >, <, >=, <=, include (the cell contains the text) or exclude (it does not). Numbers are compared as numbers, text ignores upper / lower case, and filters on more columns must all hold
+- in the result window the filter carries over: ROC, Pattern Team, Save, Print, the p-value buttons and the regression test only use the subgroups that are still shown, and a line under the table says how many of them that is. Sorting changes the view only, the 'Nr.' of a subgroup stays the same
+- in the browse window Save writes only the rows the filter leaves
 
 ## How We checked that it is the same
 

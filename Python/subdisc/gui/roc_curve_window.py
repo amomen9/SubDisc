@@ -8,17 +8,17 @@ from decimal import Decimal
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QAbstractItemView, QTableWidget, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QWidget
 
 from .. import log
 from .. import ui_hooks
 from ..file_type import FileType
-from ..java_compat import double_to_string
 from ..qm import QM
 from ..roc_point import SubgroupROCPoint
 from ..subgroup_set import SubgroupSet
 from ..target_type import TargetType
 from . import common
+from .table_filter import FilterTableView, ListTableModel
 
 F = np.float32
 RESOLUTION = 400
@@ -191,13 +191,12 @@ class ROCCurveWindow(common.Window):
         self._sp = search_parameters
         curve = ROCCurve(subgroup_set, search_parameters, quality_measure)
         rows = subgroup_set.get_roc_list_subgroups() if curve._ok else []
-        t = QTableWidget(len(rows), len(SubgroupSet.ROC_HEADER))
-        t.setHorizontalHeaderLabels(list(SubgroupSet.ROC_HEADER))
-        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        t = FilterTableView(ListTableModel(SubgroupSet.ROC_HEADER, rows))
+        t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.verticalHeader().setVisible(False)
-        for r, row in enumerate(rows):
-            for c, v in enumerate(row):
-                t.setItem(r, c, QTableWidgetItem(double_to_string(v) if isinstance(v, float) else str(v)))
+        t.verticalHeader().setDefaultSectionSize(22)
+        t.resizeColumnsToContents()
+        t.fit_headings()
         t.horizontalHeader().setStretchLastSection(True)
         t.setMaximumHeight(110)
         self.content().addWidget(t)

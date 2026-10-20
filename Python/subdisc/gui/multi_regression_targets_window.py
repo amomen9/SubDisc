@@ -1,48 +1,45 @@
 """Secondary / tertiary regression targets (Cook's distance). The button that
 opens this window is hidden in the java stable jar, and here as well."""
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QHBoxLayout, QLabel, QRadioButton,
-                               QTableView, QVBoxLayout)
+                               QVBoxLayout)
 
 from .. import column as column_module
 from .. import log
 from ..attribute_type import AttributeType
 from ..column import Column
 from . import common
+from .table_filter import FilterSortModel, FilterTableView
 
 HEADER = ("Attribute", "Target status", "Type")
 
 
-class MultiRegressionTargetsTableModel(QAbstractTableModel):
+class MultiRegressionTargetsTableModel(FilterSortModel):
     def __init__(self, table):
         super().__init__()
         self._table = table
-
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else self._table.get_nr_columns()
-
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(HEADER)
-
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
-            return HEADER[section]
-        return None
-
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
-            return None
-        c = self._table.get_column(index.row())
-        if index.column() == 0:
-            return c.get_name()
-        if index.column() == 1:
-            return c.display_target_status()
-        return str(c.get_type())
+        self.rebuild()
 
     def refresh(self):
-        self.beginResetModel()
-        self.endResetModel()
+        self.rebuild()
+
+    def source_rows(self):
+        return range(self._table.get_nr_columns())
+
+    def column_count(self):
+        return len(HEADER)
+
+    def header(self, col):
+        return HEADER[col]
+
+    def display(self, src, col):
+        c = self._table.get_column(src)
+        if col == 0:
+            return c.get_name()
+        if col == 1:
+            return c.display_target_status()
+        return str(c.get_type())
 
 
 class MultiRegressionTargetsWindow(common.Window):
@@ -55,12 +52,12 @@ class MultiRegressionTargetsWindow(common.Window):
             log.log_command_line("MultiRegressionTargetsWindow Constructor: parameters can not be 'null'.")
             return
         self._model = MultiRegressionTargetsTableModel(table)
-        self._view = QTableView()
-        self._view.setModel(self._model)
+        self._view = FilterTableView(self._model)
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.verticalHeader().setVisible(False)
         self._view.setColumnWidth(0, int(0.3 * common.WINDOW_DEFAULT_SIZE.width()))
+        self._view.fit_headings()
         self._view.horizontalHeader().setStretchLastSection(True)
         self.content().addWidget(self._view, 1)
 
@@ -96,7 +93,7 @@ class MultiRegressionTargetsWindow(common.Window):
 
     def _change(self):
         status = self._status.checkedButton().property("status")
-        for i in sorted({x.row() for x in self._view.selectionModel().selectedRows()}):
+        for i in sorted(self._view.selected_source_rows()):
             self._table.get_column(i).set_target_status(status)
         self._model.refresh()
         self._mw.update_table()

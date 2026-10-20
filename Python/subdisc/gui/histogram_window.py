@@ -4,7 +4,7 @@ CrossTable and the (numeric) PlotWindow."""
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QRadioButton, QScrollArea,
-                               QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout,
+                               QSlider, QVBoxLayout,
                                QAbstractItemView)
 from matplotlib.ticker import MaxNLocator
 
@@ -13,6 +13,7 @@ from ..attribute_type import AttributeType
 from ..java_compat import float_to_string
 from . import common
 from .charts import ChartPanel, style_axes
+from .table_filter import FilterTableView, ListTableModel
 
 # no legend when the target has many values
 TARGET_VALUES_MAX = 30
@@ -267,29 +268,21 @@ class CrossTableWindow(common.Window):
 
     def __init__(self, attribute_keys, target_keys, counts):
         super().__init__("CrossTable")
-        t = QTableWidget(len(attribute_keys) + 1, len(target_keys) + 1)
-        t.horizontalHeader().setVisible(False)
+        # java puts the target values in the first row of a header-less
+        # table; here they are real headings, so the columns can be sorted
+        # and filtered
+        headers = ["Attribute v / Target >"] + [_key_text(k) for k in target_keys]
+        rows = [[_key_text(a)] + [int(counts[i, j]) for j in range(len(target_keys))]
+                for i, a in enumerate(attribute_keys)]
+        t = FilterTableView(ListTableModel(headers, rows))
+        t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.verticalHeader().setVisible(False)
-        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
-
-        def put(r, c, text, right=False):
-            it = QTableWidgetItem(text)
-            if right:
-                it.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
-            t.setItem(r, c, it)
-
-        put(0, 0, "Attribute v / Target >")
-        for j, k in enumerate(target_keys):
-            put(0, j + 1, _key_text(k))
-        for i, k in enumerate(attribute_keys):
-            put(i + 1, 0, _key_text(k))
-            for j in range(len(target_keys)):
-                put(i + 1, j + 1, str(int(counts[i, j])), True)
         t.resizeColumnsToContents()
+        t.fit_headings()   # room for the sort and filter arrows
         self.content().addWidget(t, 1)
         self.add_button_row([common.build_button("Close", None, self.close)])
-        w = min(1200, sum(t.columnWidth(c) for c in range(t.columnCount())) + 40)
-        h = min(800, sum(t.rowHeight(r) for r in range(t.rowCount())) + 90)
+        w = min(1200, sum(t.columnWidth(c) for c in range(len(headers))) + 40)
+        h = min(800, 22 * (len(rows) + 1) + 120)
         self.show_at(50, 50)
         self.resize(max(w, 300), max(h, 160))
 
