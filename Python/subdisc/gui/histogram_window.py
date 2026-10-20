@@ -274,7 +274,7 @@ class CrossTableWindow(common.Window):
         headers = ["Attribute v / Target >"] + [_key_text(k) for k in target_keys]
         rows = [[_key_text(a)] + [int(counts[i, j]) for j in range(len(target_keys))]
                 for i, a in enumerate(attribute_keys)]
-        t = FilterTableView(ListTableModel(headers, rows))
+        t = FilterTableView(ListTableModel(headers, rows), preset_kind="cross")
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.verticalHeader().setVisible(False)
         t.resizeColumnsToContents()

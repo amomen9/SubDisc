@@ -168,6 +168,7 @@ class BrowseJTable(FilterTableView):
             if tp is not None:
                 n = min(len(tp), len(members))
                 tp = np.asarray(tp[:n], dtype=bool) & np.asarray(members[:n], dtype=bool)
+        self.preset_kind = "browse"
         self.setModel(BrowseTableModel(table, members, tp))
         self.setSelectionBehavior(QAbstractItemView.SelectColumns)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)

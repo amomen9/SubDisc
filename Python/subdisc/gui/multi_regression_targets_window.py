@@ -52,7 +52,7 @@ class MultiRegressionTargetsWindow(common.Window):
             log.log_command_line("MultiRegressionTargetsWindow Constructor: parameters can not be 'null'.")
             return
         self._model = MultiRegressionTargetsTableModel(table)
-        self._view = FilterTableView(self._model)
+        self._view = FilterTableView(self._model, preset_kind="regression")
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.verticalHeader().setVisible(False)

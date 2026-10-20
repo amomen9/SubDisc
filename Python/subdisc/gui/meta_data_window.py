@@ -74,7 +74,7 @@ class MetaDataWindow(common.Window):
             log.log_command_line("MetaDataWindow Constructor: parameters can not be 'null'.")
             return
         self._model = MetaDataTableModel(table)
-        self._view = FilterTableView(self._model)
+        self._view = FilterTableView(self._model, preset_kind="meta")
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setAlternatingRowColors(True)

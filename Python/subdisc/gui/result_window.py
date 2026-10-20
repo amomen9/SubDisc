@@ -98,7 +98,7 @@ class ResultTableModel(FilterSortModel):
 
 
 def _result_view(model):
-    v = FilterTableView(model)
+    v = FilterTableView(model, preset_kind="result")
     v.setSelectionBehavior(QAbstractItemView.SelectRows)
     v.setSelectionMode(QAbstractItemView.ExtendedSelection)
     v.setAlternatingRowColors(True)
@@ -363,9 +363,10 @@ class ResultWindow(common.Window):
         s = self._visible_or_warn("ROC")
         if s is None:
             return
-        w = ROCCurveWindow(s, self._sp, self._qm)
+        note = None
         if s is not self._set:
-            w.setWindowTitle(w.windowTitle() + "  [filtered: %d of %d subgroups]" % (len(s), len(self._set)))
+            note = "[result filter: %d of %d subgroups]" % (len(s), len(self._set))
+        ROCCurveWindow(s, self._sp, self._qm, note)
 
     def _pattern_team_clicked(self):
         source = self._visible_or_warn("Pattern Team")

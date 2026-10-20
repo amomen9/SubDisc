@@ -18,6 +18,7 @@ from ..roc_point import SubgroupROCPoint
 from ..subgroup_set import SubgroupSet
 from ..target_type import TargetType
 from . import common
+from ..java_compat import double_to_string
 from .table_filter import FilterTableView, ListTableModel
 
 F = np.float32
@@ -34,14 +35,12 @@ class ROCCurve(QWidget):
         self.setMinimumSize(300, 300)
         self._ok = False
         self._auc = ""
-        roc = subgroup_set.get_roc_list()
-        if roc is None:
+        self._curve = []
+        self._points = []
+        if not self.set_subgroups(subgroup_set):
             return
-        self._ok = True
-        self._auc = common.number(roc.get_area_under_curve(), 3)
-        self._curve = [(0.0, 0.0)] + [(float(p.get_fpr()), -float(p.get_tpr())) for p in roc] + [(1.0, -1.0)]
-        self._points = [(float(pt.get_fpr()), -float(pt.get_tpr())) for pt in (SubgroupROCPoint(s) for s in subgroup_set)]
 
+        # these depend on the whole data set, not on which subgroups are drawn
         total = subgroup_set.get_total_coverage()
         self._total_target = F(subgroup_set.get_total_target_coverage())
         min_cov = search_parameters.get_minimum_coverage()
@@ -78,6 +77,19 @@ class ROCCurve(QWidget):
             L.append(((0.0, -t), (-0.01, -t)))
         self._lines = L
         self._isometrics = None
+
+    def set_subgroups(self, subgroup_set):
+        """(re)load the curve and the points, used again when the table of
+        the ROC window is filtered"""
+        roc = subgroup_set.get_roc_list()
+        if roc is None:
+            return False
+        self._ok = True
+        self._auc = common.number(roc.get_area_under_curve(), 3)
+        self._curve = [(0.0, 0.0)] + [(float(p.get_fpr()), -float(p.get_tpr())) for p in roc] + [(1.0, -1.0)]
+        self._points = [(float(pt.get_fpr()), -float(pt.get_tpr())) for pt in (SubgroupROCPoint(s) for s in subgroup_set)]
+        self.update()
+        return True
 
     def get_area_under_curve(self):
         return self._auc
@@ -185,26 +197,84 @@ def _plain(d):
 
 
 class ROCCurveWindow(common.Window):
-    def __init__(self, subgroup_set, search_parameters, quality_measure):
+    """note: shown in the title, e.g. the filter of the result window.
+
+    The table lists the subgroups on the convex hull. A filter on it (not in
+    java) is applied to all subgroups of the window, the curve, the points
+    and the area under the curve are drawn again from the ones that pass,
+    and the table then shows the hull of those."""
+
+    def __init__(self, subgroup_set, search_parameters, quality_measure, note=None):
         super().__init__()
         self._set = subgroup_set
+        self._current = subgroup_set   # after the table filter
         self._sp = search_parameters
-        curve = ROCCurve(subgroup_set, search_parameters, quality_measure)
-        rows = subgroup_set.get_roc_list_subgroups() if curve._ok else []
-        t = FilterTableView(ListTableModel(SubgroupSet.ROC_HEADER, rows))
+        self._note = note
+        self._updating = False
+        self._curve = ROCCurve(subgroup_set, search_parameters, quality_measure)
+        rows = subgroup_set.get_roc_list_subgroups() if self._curve._ok else []
+        self._model = ListTableModel(SubgroupSet.ROC_HEADER, rows)
+        t = FilterTableView(self._model, preset_kind="roc")
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.verticalHeader().setVisible(False)
         t.verticalHeader().setDefaultSectionSize(22)
         t.resizeColumnsToContents()
         t.fit_headings()
         t.horizontalHeader().setStretchLastSection(True)
-        t.setMaximumHeight(110)
+        t.setMaximumHeight(130)
+        self._table = t
         self.content().addWidget(t)
-        self.content().addWidget(curve, 1)
+        self.content().addWidget(self._curve, 1)
         self.add_button_row([common.build_button("GnuPlot", "G", self._gnuplot),
                              common.build_button("Close", "C", self.close)])
-        self.setWindowTitle("ROC Curve (area under curve: " + curve.get_area_under_curve() + ")")
+        self._model.filtersChanged.connect(self._table_filtered)
+        self._set_title()
         self.show_at(100, 100, common.ROC_WINDOW_DEFAULT_SIZE)
+
+    def _set_title(self):
+        s = "ROC Curve (area under curve: " + self._curve.get_area_under_curve() + ")"
+        if self._note:
+            s += "  " + self._note
+        if self._current is not self._set:
+            s += "  [table filter: %d of %d subgroups]" % (len(self._current), len(self._set))
+        self.setWindowTitle(s)
+
+    def _passing(self):
+        """the subgroups of the window that pass the filters of the table,
+        each judged on the same columns as the table (ID, FPR, TPR, Conditions)"""
+        filters = self._model.filters()
+        out = []
+        for s in self._set:
+            p = SubgroupROCPoint(s)
+            raw = (s.get_id(), p.get_fpr(), p.get_tpr(), str(s.get_conditions()))
+            ok = True
+            for col, cf in filters.items():
+                v = raw[col]
+                d = double_to_string(v) if isinstance(v, float) else str(v)
+                if not cf.accepts(v, d):
+                    ok = False
+                    break
+            if ok:
+                out.append(s)
+        return out
+
+    def _table_filtered(self):
+        if self._updating or not self._curve._ok:
+            return
+        if self._model.is_filtered():
+            current = self._set._empty_copy()
+            for s in self._passing():
+                current.add(s)
+        else:
+            current = self._set
+        self._current = current
+        self._curve.set_subgroups(current)
+        self._updating = True
+        try:
+            self._model.set_rows(current.get_roc_list_subgroups())
+        finally:
+            self._updating = False
+        self._set_title()
 
     def _gnuplot(self):
         path = ui_hooks.choose_save_file(FileType.PLT)
@@ -220,7 +290,7 @@ class ROCCurveWindow(common.Window):
         sz = _plain(0.001)
         fmt_sg = "set object circle at %s, %s, %d size " + sz + " fc rgb \"black\"\n"
         fmt_hull = "set arrow from %s, %s, %d to %s, %s, %d nohead lt 1 lw 2 lc rgb \"black\"\n"
-        roc = self._set.get_roc_list()
+        roc = self._current.get_roc_list()
         auc = _plain(roc.get_area_under_curve()).replace(".", "p")
         fmt_file = "roc-%s-auc" + auc + ".eps"
         sb = []
@@ -234,8 +304,8 @@ class ROCCurveWindow(common.Window):
         a("set ytics 0.1\n")
         a("\n")
         a("# basic functions for Quality Measures\n")
-        a("N = " + str(self._set.get_total_coverage()) + ".0\n")
-        a("p = " + str(int(self._set.get_total_target_coverage())) + ".0\n")
+        a("N = " + str(self._current.get_total_coverage()) + ".0\n")
+        a("p = " + str(int(self._current.get_total_target_coverage())) + ".0\n")
         a("n = N-p\n")
         a("pos(y) = y*p\n")
         a("neg(x) = x*(N-p)\n")
@@ -259,7 +329,7 @@ class ROCCurveWindow(common.Window):
             a(QM.get_definition(q) + "\n")
         a("\n")
         a("# a point for every subgroup\n")
-        for s in self._set:
+        for s in self._current:
             a(fmt_sg % (_plain(s.get_false_positive_rate()), _plain(s.get_true_positive_rate()), s.get_id()))
         a("\n")
         a("# points/lines for subgroups on the convex hull\n")

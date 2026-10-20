@@ -4,7 +4,12 @@
   to the original order
 - the small arrow at the right end of a heading opens a filter: a value and
   one of =, >, <, >=, <=, include (the cell text contains the value) and
-  exclude (it does not). Filters on several columns must all hold
+  exclude (it does not). A second condition on the same column can be added,
+  joined with 'and' or 'or'. Filters on several columns must all hold
+- the filters of a table can be saved as a named preset and applied again
+  later, also in other windows of the same kind (presets menu in the filter
+  box, or a right click on a heading). Presets are kept on this computer
+  only (QSettings), the result and autorun files stay as java writes them
 
 Numbers are compared as numbers (also '5,178' with a grouping comma), the
 rest as text, ignoring upper / lower case. '=' compares with the number as
@@ -14,17 +19,23 @@ The models keep a list of visible source rows, windows that start other
 things from a table (ROC, Pattern Team, Save, ...) ask for those rows.
 """
 
+import json
 import re
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRect, Qt, Signal
+import numpy as np
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPolygon
-from PySide6.QtWidgets import (QComboBox, QCompleter, QFrame, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QPushButton, QTableView, QToolTip, QVBoxLayout)
+from PySide6.QtWidgets import (QComboBox, QCompleter, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
+                               QTableView, QToolTip, QVBoxLayout)
 
 from ..java_compat import double_to_string
 
 OPS = ("=", ">", "<", ">=", "<=", "include", "exclude")
+JOINS = ("and", "or")
 ARROW_W = 16
+# where the presets live, tests point this somewhere else
+PRESET_STORE = ("SubDisc", "SubDisc")
 
 _GROUPED = re.compile(r"^[+-]?\d{1,3}(,\d{3})+(\.\d*)?$")
 
@@ -49,11 +60,11 @@ def parse_number(text):
 
 
 def _is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, (bool, np.bool_))
 
 
 def match(raw, display, op, text):
-    """does one cell pass the filter (op, text)"""
+    """does one cell pass one condition (op, text)"""
     t = (text or "").strip()
     d = "" if display is None else str(display)
     if op == "include":
@@ -104,6 +115,54 @@ def sort_key(raw):
     return (1, s.lower())
 
 
+class ColumnFilter:
+    """one or two conditions on one column; a second condition only counts
+    when its value box is not empty"""
+
+    __slots__ = ("conds", "join")
+
+    def __init__(self, op, text, join=None, op2=None, text2=None):
+        self.conds = [(op, text or "")]
+        self.join = "and"
+        if join in JOINS and op2 in OPS and (text2 or "").strip():
+            self.conds.append((op2, text2))
+            self.join = join
+
+    def accepts(self, raw, display):
+        hits = [match(raw, display, op, t) for op, t in self.conds]
+        return all(hits) if self.join == "and" else any(hits)
+
+    def describe(self):
+        s = "%s %s" % self.conds[0]
+        if len(self.conds) > 1:
+            s += " %s %s %s" % (self.join, self.conds[1][0], self.conds[1][1])
+        return s
+
+    def to_json(self):
+        return {"conds": [list(c) for c in self.conds], "join": self.join}
+
+    @staticmethod
+    def from_json(d):
+        conds = d.get("conds") or []
+        if not conds:
+            return None
+        op, text = conds[0]
+        if len(conds) > 1:
+            return ColumnFilter(op, text, d.get("join", "and"), conds[1][0], conds[1][1])
+        return ColumnFilter(op, text)
+
+    def __eq__(self, other):
+        return isinstance(other, ColumnFilter) and self.conds == other.conds and self.join == other.join
+
+    def __repr__(self):
+        return "ColumnFilter(%s)" % self.describe()
+
+
+def heading_key(text):
+    """presets match columns on the first line of the heading, ignoring case"""
+    return str(text or "").split("\n")[0].strip().lower()
+
+
 class FilterSortModel(QAbstractTableModel):
     """Base model: subclasses give the cells, this class keeps the visible
     rows (filtered and sorted) as a list of source row numbers.
@@ -116,7 +175,7 @@ class FilterSortModel(QAbstractTableModel):
 
     def __init__(self):
         super().__init__()
-        self._filters = {}     # col -> (op, text), in the order they were set
+        self._filters = {}     # col -> ColumnFilter, in the order they were set
         self._sort = None      # (col, order) or None for the original order
         self._rows = []
         self._all = []
@@ -145,6 +204,7 @@ class FilterSortModel(QAbstractTableModel):
 
     # ---- overridable for speed (see the browse window) -----------------
     def filter_rows(self, rows, col, op, text):
+        """the rows that pass one condition"""
         return [r for r in rows if match(self.raw(r, col), self.display(r, col), op, text)]
 
     def sort_rows(self, rows, col, descending):
@@ -211,11 +271,25 @@ class FilterSortModel(QAbstractTableModel):
         self.endResetModel()
         self.filtersChanged.emit()
 
+    def _apply_column_filter(self, rows, col, cf):
+        first = self.filter_rows(rows, col, *cf.conds[0])
+        if len(cf.conds) == 1:
+            return first
+        if cf.join == "and":
+            return self.filter_rows(first, col, *cf.conds[1])
+        second = self.filter_rows(rows, col, *cf.conds[1])
+        # 'or': keep the rows in their original order
+        if isinstance(rows, np.ndarray):
+            keep = np.isin(rows, np.asarray(first)) | np.isin(rows, np.asarray(second))
+            return rows[keep]
+        both = set(first) | set(second)
+        return [r for r in rows if r in both]
+
     def _compute(self):
         rows = self._all
-        for col, (op, text) in self._filters.items():
+        for col, cf in self._filters.items():
             if col < self.column_count():
-                rows = self.filter_rows(rows, col, op, text)
+                rows = self._apply_column_filter(rows, col, cf)
         if self._sort is not None and self._sort[0] < self.column_count():
             rows = self.sort_rows(rows, self._sort[0], self._sort[1] == Qt.DescendingOrder)
         return rows
@@ -236,8 +310,13 @@ class FilterSortModel(QAbstractTableModel):
         self.changePersistentIndexList(old, new)
         self.layoutChanged.emit()
 
-    def set_filter(self, col, op, text):
-        self._filters[col] = (op, text)
+    def set_filter(self, col, op, text, join=None, op2=None, text2=None):
+        self._filters[col] = ColumnFilter(op, text, join, op2, text2)
+        self.rebuild()
+
+    def set_filters(self, filters):
+        """replace all filters at once {col: ColumnFilter}"""
+        self._filters = dict(filters)
         self.rebuild()
 
     def clear_filter(self, col):
@@ -259,8 +338,8 @@ class FilterSortModel(QAbstractTableModel):
         return bool(self._filters)
 
     def describe_filters(self):
-        return "; ".join("%s %s %s" % (self.header(c).replace("\n", " "), op, text)
-                         for c, (op, text) in self._filters.items())
+        return "; ".join("%s %s" % (self.header(c).replace("\n", " "), cf.describe())
+                         for c, cf in self._filters.items())
 
     def source_row(self, view_row):
         return self._rows[view_row]
@@ -277,6 +356,78 @@ class FilterSortModel(QAbstractTableModel):
                 return i
         return -1
 
+    # ---- presets -------------------------------------------------------
+    def filters_as_preset(self):
+        return {heading_key(self.header(c)): cf.to_json() for c, cf in self._filters.items()}
+
+    def apply_preset(self, preset):
+        """returns the headings of the preset that this table does not have"""
+        by_key = {heading_key(self.header(c)): c for c in range(self.column_count())}
+        filters, missing = {}, []
+        for key, d in preset.items():
+            cf = ColumnFilter.from_json(d)
+            if cf is None:
+                continue
+            if key in by_key:
+                filters[by_key[key]] = cf
+            else:
+                missing.append(key)
+        self.set_filters(filters)
+        return missing
+
+
+# ----------------------------------------------------------------------
+# presets on disk
+# ----------------------------------------------------------------------
+
+def _settings():
+    # a path means an ini file (the tests use one), else (org, app)
+    if isinstance(PRESET_STORE, str):
+        return QSettings(PRESET_STORE, QSettings.IniFormat)
+    return QSettings(*PRESET_STORE)
+
+
+def load_presets(kind):
+    try:
+        s = _settings().value("filter_presets/" + kind, "")
+        d = json.loads(s) if s else {}
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_presets(kind, presets):
+    st = _settings()
+    st.setValue("filter_presets/" + kind, json.dumps(presets))
+    st.sync()
+
+
+def preset_menu(view, parent=None):
+    """the presets menu of a FilterTableView (filter box and heading right click)"""
+    m = view.model()
+    kind = view.preset_kind
+    presets = load_presets(kind)
+    menu = QMenu(parent or view)
+    a = menu.addAction("Save filters as preset...")
+    a.setEnabled(m.is_filtered())
+    a.triggered.connect(lambda: view.save_preset())
+    apply_menu = menu.addMenu("Apply preset")
+    delete_menu = menu.addMenu("Delete preset")
+    for name in sorted(presets, key=str.lower):
+        apply_menu.addAction(name).triggered.connect(lambda _=False, n=name: view.apply_preset(n))
+        delete_menu.addAction(name).triggered.connect(lambda _=False, n=name: view.delete_preset(n))
+    apply_menu.setEnabled(bool(presets))
+    delete_menu.setEnabled(bool(presets))
+    menu.addSeparator()
+    c = menu.addAction("Clear all filters")
+    c.setEnabled(m.is_filtered())
+    c.triggered.connect(m.clear_filters)
+    return menu
+
+
+# ----------------------------------------------------------------------
+# widgets
+# ----------------------------------------------------------------------
 
 class FilterPopup(QFrame):
     def __init__(self, header, col):
@@ -289,27 +440,34 @@ class FilterPopup(QFrame):
         lay.setContentsMargins(8, 8, 8, 8)
         name = model.header(col).replace("\n", " ")
         lay.addWidget(QLabel("Filter <b>%s</b>" % _html(name)))
-        row = QHBoxLayout()
+        try:
+            values = model.distinct_texts(col)
+        except Exception:
+            values = []
+        grid = QGridLayout()
         self._op = QComboBox()
         self._op.addItems(OPS)
-        self._value = QLineEdit()
-        self._value.setPlaceholderText("value")
-        self._value.setMinimumWidth(170)
+        self._value = self._value_box(values, "value")
+        self._join = QComboBox()
+        self._join.addItems(JOINS)
+        self._op2 = QComboBox()
+        self._op2.addItems(OPS)
+        self._value2 = self._value_box(values, "second value (optional)")
+        grid.addWidget(self._op, 0, 0)
+        grid.addWidget(self._value, 0, 1)
+        grid.addWidget(self._join, 1, 0)
+        grid.addWidget(QLabel("<span style='color: palette(mid)'>second condition (optional)</span>"), 1, 1)
+        grid.addWidget(self._op2, 2, 0)
+        grid.addWidget(self._value2, 2, 1)
+        lay.addLayout(grid)
         current = model.filter_of(col)
         if current is not None:
-            self._op.setCurrentText(current[0])
-            self._value.setText(current[1])
-        try:
-            comp = QCompleter(model.distinct_texts(col), self)
-            comp.setCaseSensitivity(Qt.CaseInsensitive)
-            comp.setFilterMode(Qt.MatchContains)
-            self._value.setCompleter(comp)
-        except Exception:
-            pass
-        self._value.returnPressed.connect(self._apply)
-        row.addWidget(self._op)
-        row.addWidget(self._value, 1)
-        lay.addLayout(row)
+            self._op.setCurrentText(current.conds[0][0])
+            self._value.setText(current.conds[0][1])
+            if len(current.conds) > 1:
+                self._join.setCurrentText(current.join)
+                self._op2.setCurrentText(current.conds[1][0])
+                self._value2.setText(current.conds[1][1])
         buttons = QHBoxLayout()
         apply = QPushButton("Apply")
         apply.setDefault(True)
@@ -319,14 +477,30 @@ class FilterPopup(QFrame):
         clear_all = QPushButton("Clear all")
         clear_all.clicked.connect(self._clear_all)
         clear_all.setEnabled(model.is_filtered())
+        presets = QPushButton("Presets")
+        presets.clicked.connect(self._presets)
         buttons.addWidget(apply)
         buttons.addWidget(clear)
         buttons.addWidget(clear_all)
+        buttons.addWidget(presets)
         lay.addLayout(buttons)
         self._value.setFocus()
 
+    def _value_box(self, values, placeholder):
+        e = QLineEdit()
+        e.setPlaceholderText(placeholder)
+        e.setMinimumWidth(190)
+        if values:
+            comp = QCompleter(values, self)
+            comp.setCaseSensitivity(Qt.CaseInsensitive)
+            comp.setFilterMode(Qt.MatchContains)
+            e.setCompleter(comp)
+        e.returnPressed.connect(self._apply)
+        return e
+
     def _apply(self):
-        self._header.model().set_filter(self._col, self._op.currentText(), self._value.text())
+        self._header.model().set_filter(self._col, self._op.currentText(), self._value.text(),
+                                        self._join.currentText(), self._op2.currentText(), self._value2.text())
         self.close()
 
     def _clear(self):
@@ -337,13 +511,21 @@ class FilterPopup(QFrame):
         self._header.model().clear_filters()
         self.close()
 
+    def _presets(self):
+        view = self._header.parent()
+        pos = self.mapToGlobal(QPoint(0, self.height()))
+        self.close()
+        # after the popup is gone, the menu is a popup of its own
+        QTimer.singleShot(0, lambda: preset_menu(view).exec(pos))
+
 
 def _html(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 class FilterHeader(QHeaderView):
-    """horizontal header: click sorts, the arrow at the right end filters"""
+    """horizontal header: click sorts, the arrow at the right end filters,
+    a right click opens the presets menu"""
 
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
@@ -413,16 +595,19 @@ class FilterHeader(QHeaderView):
             return -1
         return logical if self.arrow_rect(logical).contains(pos) else -1
 
+    def open_filter(self, logical):
+        r = self.arrow_rect(logical)
+        popup = FilterPopup(self, logical)
+        popup.adjustSize()
+        popup.move(self.viewport().mapToGlobal(QPoint(r.right() - popup.width(), r.bottom())))
+        popup.show()
+        return popup
+
     def mousePressEvent(self, e):
         logical = self._arrow_at(e.position().toPoint())
         if logical >= 0 and e.button() == Qt.LeftButton and isinstance(self.model(), FilterSortModel):
             self._arrow_press = True
-            r = self.arrow_rect(logical)
-            popup = FilterPopup(self, logical)
-            popup.adjustSize()
-            pt = self.viewport().mapToGlobal(QPoint(r.right() - popup.width(), r.bottom()))
-            popup.move(pt)
-            popup.show()
+            self.open_filter(logical)
             e.accept()
             return
         self._arrow_press = False
@@ -448,6 +633,14 @@ class FilterHeader(QHeaderView):
             self.viewport().update()
         super().leaveEvent(e)
 
+    def contextMenuEvent(self, e):
+        view = self.parent()
+        if isinstance(view, FilterTableView) and isinstance(self.model(), FilterSortModel):
+            preset_menu(view, self).exec(e.globalPos())
+            e.accept()
+            return
+        super().contextMenuEvent(e)
+
     def viewportEvent(self, e):
         if e.type() == QEvent.ToolTip:
             pos = e.pos()
@@ -456,21 +649,23 @@ class FilterHeader(QHeaderView):
             if logical >= 0 and isinstance(m, FilterSortModel):
                 f = m.filter_of(logical)
                 if self.arrow_rect(logical).contains(pos):
-                    tip = "Filter: %s %s" % f if f else "Filter this column"
+                    tip = ("Filter: " + f.describe()) if f else "Filter this column"
                 else:
-                    tip = "Click to sort (ascending, descending, original order)"
+                    tip = "Click to sort (ascending, descending, original order)\nRight click: filter presets"
                     if f:
-                        tip += "\nFiltered: %s %s" % f
+                        tip += "\nFiltered: " + f.describe()
                 QToolTip.showText(e.globalPos(), tip, self)
                 return True
         return super().viewportEvent(e)
 
 
 class FilterTableView(QTableView):
-    """QTableView with the sorting / filtering header"""
+    """QTableView with the sorting / filtering header. preset_kind groups
+    the presets: tables of the same kind share them."""
 
-    def __init__(self, model=None, parent=None):
+    def __init__(self, model=None, parent=None, preset_kind="table"):
         super().__init__(parent)
+        self.preset_kind = preset_kind
         self.setHorizontalHeader(FilterHeader(self))
         if model is not None:
             self.setModel(model)
@@ -503,6 +698,36 @@ class FilterTableView(QTableView):
             if self.columnWidth(c) < need:
                 self.setColumnWidth(c, need)
 
+    # ---- presets -------------------------------------------------------
+    def save_preset(self, name=None):
+        m = self.model()
+        if not m.is_filtered():
+            return False
+        if name is None:
+            name, ok = QInputDialog.getText(self, "Save filter preset", "Name of the preset:",
+                                            text=m.describe_filters()[:60])
+            if not ok or not name.strip():
+                return False
+        presets = load_presets(self.preset_kind)
+        presets[name.strip()] = m.filters_as_preset()
+        save_presets(self.preset_kind, presets)
+        return True
+
+    def apply_preset(self, name, quiet=False):
+        preset = load_presets(self.preset_kind).get(name)
+        if preset is None:
+            return None
+        missing = self.model().apply_preset(preset)
+        if missing and not quiet:
+            QMessageBox.information(self, "Filter preset",
+                                    "Not applied, this table has no column: " + ", ".join(missing))
+        return missing
+
+    def delete_preset(self, name):
+        presets = load_presets(self.preset_kind)
+        if presets.pop(name, None) is not None:
+            save_presets(self.preset_kind, presets)
+
 
 class ListTableModel(FilterSortModel):
     """a plain list of rows (tuples) with headings"""
@@ -512,6 +737,11 @@ class ListTableModel(FilterSortModel):
         self._headers = list(headers)
         self._data = [tuple(r) for r in rows]
         self._right = set(right_aligned)
+        self.rebuild()
+
+    def set_rows(self, rows):
+        """new data, filters and sorting stay"""
+        self._data = [tuple(r) for r in rows]
         self.rebuild()
 
     def column_count(self):
