@@ -94,6 +94,45 @@ def test_presets_save_apply_delete(app, presets_store):
     assert "big ones" not in load_presets("t")
 
 
+def test_presets_from_other_kind(app, presets_store):
+    from subdisc.gui.table_filter import FilterTableView, ListTableModel, preset_kinds
+    a = FilterTableView(ListTableModel(["age", "sex"], [[30, "Male"], [60, "Female"]]), preset_kind="browse")
+    a.model().set_filter(0, ">", "50")
+    a.save_preset("older")
+    assert preset_kinds() == ["browse"]
+    b = FilterTableView(ListTableModel(["Attribute v / Target >", "age"], [["x", 10], ["y", 70]]), preset_kind="cross")
+    assert b.apply_preset("older", quiet=True) is None            # not in its own kind
+    assert b.apply_preset("older", quiet=True, kind="browse") == []
+    assert b.model().rowCount() == 1
+
+
+def test_filter_info_line(app):
+    from subdisc.gui.table_filter import FilterInfo, FilterTableView, ListTableModel
+    v = FilterTableView(ListTableModel(["n"], [[1], [2], [3]]))
+    info = FilterInfo(v, "numbers", "extra words")
+    assert info.isHidden()
+    v.model().set_filter(0, ">", "1")
+    assert not info.isHidden()
+    assert "Showing 2 of 3 numbers" in info.text() and "extra words" in info.text()
+    info.linkActivated.emit("clear")                 # the 'clear filters' link
+    assert not v.model().is_filtered() and info.isHidden()
+
+
+def test_browse_numeric_include_same_as_row_by_row(app):
+    from subdisc.data_loader_txt import DataLoaderTXT
+    from subdisc.gui.browse_window import BrowseTableModel
+    from subdisc.gui.table_filter import match
+    t = DataLoaderTXT(resource("adult.txt")).get_table()
+    m = BrowseTableModel(t)
+    for op, text in (("include", "4"), ("exclude", "0"), ("include", "1,0")):
+        m.set_filter(2, op, text)                    # fnlwgt, shown with a grouping comma
+        got = set(int(r) for r in m.visible_source_rows())
+        want = {r for r in range(t.get_nr_rows())
+                if match(float(t.get_column(2).get_float(r)), m.display(r, 2), op, text)}
+        assert got == want
+    assert m.distinct_texts(0)[:2] == ["17", "18"]   # age, numeric completer values
+
+
 def test_roc_table_filter_redraws_curve(app):
     from subdisc import process
     from subdisc.file_handler import Action, FileHandler

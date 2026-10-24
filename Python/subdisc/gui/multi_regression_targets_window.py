@@ -10,7 +10,7 @@ from .. import log
 from ..attribute_type import AttributeType
 from ..column import Column
 from . import common
-from .table_filter import FilterSortModel, FilterTableView
+from .table_filter import FilterInfo, FilterSortModel, FilterTableView
 
 HEADER = ("Attribute", "Target status", "Type")
 
@@ -60,6 +60,7 @@ class MultiRegressionTargetsWindow(common.Window):
         self._view.fit_headings()
         self._view.horizontalHeader().setStretchLastSection(True)
         self.content().addWidget(self._view, 1)
+        self.content().addWidget(FilterInfo(self._view, "attributes"))
 
         row = QHBoxLayout()
         st = common.build_border("Set Target Status")

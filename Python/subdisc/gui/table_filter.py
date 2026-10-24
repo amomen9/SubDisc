@@ -338,7 +338,8 @@ class FilterSortModel(QAbstractTableModel):
         return bool(self._filters)
 
     def describe_filters(self):
-        return "; ".join("%s %s" % (self.header(c).replace("\n", " "), cf.describe())
+        # first line of the heading only (browse adds '(66 distinct)')
+        return "; ".join("%s %s" % (str(self.header(c)).split("\n")[0], cf.describe())
                          for c, cf in self._filters.items())
 
     def source_row(self, view_row):
@@ -387,6 +388,17 @@ def _settings():
     return QSettings(*PRESET_STORE)
 
 
+KIND_NAMES = {
+    "result": "Result windows",
+    "browse": "Browse windows",
+    "meta": "Meta data",
+    "roc": "ROC tables",
+    "cross": "Cross tables",
+    "regression": "Regression targets",
+    "table": "Other tables",
+}
+
+
 def load_presets(kind):
     try:
         s = _settings().value("filter_presets/" + kind, "")
@@ -394,6 +406,18 @@ def load_presets(kind):
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+
+
+def preset_kinds():
+    """the kinds of table that have presets saved"""
+    try:
+        st = _settings()
+        st.beginGroup("filter_presets")
+        kinds = list(st.childKeys())
+        st.endGroup()
+    except Exception:
+        return []
+    return sorted(k for k in kinds if load_presets(k))
 
 
 def save_presets(kind, presets):
@@ -418,6 +442,14 @@ def preset_menu(view, parent=None):
         delete_menu.addAction(name).triggered.connect(lambda _=False, n=name: view.delete_preset(n))
     apply_menu.setEnabled(bool(presets))
     delete_menu.setEnabled(bool(presets))
+    # presets of other kinds of table, columns are matched by heading
+    others = [k for k in preset_kinds() if k != kind]
+    other_menu = menu.addMenu("From other tables")
+    for k in others:
+        sub = other_menu.addMenu(KIND_NAMES.get(k, k))
+        for name in sorted(load_presets(k), key=str.lower):
+            sub.addAction(name).triggered.connect(lambda _=False, n=name, kk=k: view.apply_preset(n, kind=kk))
+    other_menu.setEnabled(bool(others))
     menu.addSeparator()
     c = menu.addAction("Clear all filters")
     c.setEnabled(m.is_filtered())
@@ -713,8 +745,9 @@ class FilterTableView(QTableView):
         save_presets(self.preset_kind, presets)
         return True
 
-    def apply_preset(self, name, quiet=False):
-        preset = load_presets(self.preset_kind).get(name)
+    def apply_preset(self, name, quiet=False, kind=None):
+        """kind: apply a preset saved in another kind of table"""
+        preset = load_presets(kind or self.preset_kind).get(name)
         if preset is None:
             return None
         missing = self.model().apply_preset(preset)
@@ -727,6 +760,38 @@ class FilterTableView(QTableView):
         presets = load_presets(self.preset_kind)
         if presets.pop(name, None) is not None:
             save_presets(self.preset_kind, presets)
+
+
+class FilterInfo(QLabel):
+    """the line under a table while a filter is on: 'Showing 10 of 16
+    subgroups, filter: ... (clear)'. counter() may give (shown, total) when
+    the rows of the table are not what is being counted (ROC window)."""
+
+    def __init__(self, view, noun="rows", extra="", counter=None):
+        super().__init__()
+        self._view = view
+        self._noun = noun
+        self._extra = extra
+        self._counter = counter
+        self.setWordWrap(True)
+        self.setTextFormat(Qt.RichText)
+        self.setStyleSheet("color: palette(highlight);")
+        self.linkActivated.connect(lambda _l: self._view.model().clear_filters())
+        view.model().filtersChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self):
+        m = self._view.model()
+        if not m.is_filtered():
+            self.setVisible(False)
+            return
+        shown, total = self._counter() if self._counter else (m.rowCount(), len(m.all_source_rows()))
+        text = "Showing %s of %s %s, filter: %s." % ("{:,}".format(shown), "{:,}".format(total), self._noun,
+                                                    _html(m.describe_filters()))
+        if self._extra:
+            text += "  " + self._extra
+        self.setText(text + "  <a href='clear'>clear filters</a>")
+        self.setVisible(True)
 
 
 class ListTableModel(FilterSortModel):

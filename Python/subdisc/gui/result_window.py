@@ -8,7 +8,7 @@ import time
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut, QTextDocument
-from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLabel, QMessageBox, QTabWidget
+from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QMessageBox, QTabWidget, QVBoxLayout, QWidget
 
 from .. import log
 from .. import probability_density_function as pdfm
@@ -30,7 +30,7 @@ from .label_ranking_matrix_window import LabelRankingMatrixWindow
 from .model_window import ModelWindow
 from .pdf_window_2d import PDFWindow2D
 from .roc_curve_window import ROCCurveWindow
-from .table_filter import FilterSortModel, FilterTableView
+from .table_filter import FilterInfo, FilterSortModel, FilterTableView
 
 
 def create_title(subgroup):
@@ -134,9 +134,8 @@ class ResultWindow(common.Window):
         self._view = _result_view(self._model)
         self.content().addWidget(self._view, 1)
         # 'Showing 5 of 16 subgroups ...', only while a filter is on
-        self._filter_info = QLabel()
-        self._filter_info.setStyleSheet("color: palette(highlight);")
-        self._filter_info.setVisible(False)
+        self._filter_info = FilterInfo(self._view, "subgroups",
+                                       "ROC, Pattern Team, Save, Print and the p-values use only these.")
         self.content().addWidget(self._filter_info)
         self._model.filtersChanged.connect(self._filters_changed)
         if len(self._model.items()) > 0:
@@ -221,13 +220,6 @@ class ResultWindow(common.Window):
     # ------------------------------------------------------------------
 
     def _filters_changed(self):
-        m = self._model
-        if m.is_filtered():
-            self._filter_info.setText("Showing %d of %d subgroups, filter: %s.   ROC, Pattern Team, Save, Print and the "
-                                      "p-values use only these." % (m.rowCount(), len(m.items()), m.describe_filters()))
-            self._filter_info.setVisible(True)
-        else:
-            self._filter_info.setVisible(False)
         if self._view.selectionModel() is not None and not self._view.selectionModel().hasSelection():
             self._view.select_first()
 
@@ -565,6 +557,11 @@ class PatternTeamTabWindow(common.Window):
         for i, ss in enumerate(grouping, 1):
             v = _result_view(ResultTableModel(ss, tt))
             self._views.append(v)
-            tabs.addTab(v, "Group %d (%d)" % (i, len(ss)))
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(v, 1)
+            lay.addWidget(FilterInfo(v, "subgroups"))
+            tabs.addTab(page, "Group %d (%d)" % (i, len(ss)))
         self.content().addWidget(tabs, 1)
         self.show_at(300, 300, common.WINDOW_DEFAULT_SIZE)

@@ -13,7 +13,7 @@ from ..attribute_type import AttributeType
 from ..java_compat import float_to_string
 from . import common
 from .charts import ChartPanel, style_axes
-from .table_filter import FilterTableView, ListTableModel
+from .table_filter import FilterInfo, FilterTableView, ListTableModel
 
 # no legend when the target has many values
 TARGET_VALUES_MAX = 30
@@ -280,6 +280,7 @@ class CrossTableWindow(common.Window):
         t.resizeColumnsToContents()
         t.fit_headings()   # room for the sort and filter arrows
         self.content().addWidget(t, 1)
+        self.content().addWidget(FilterInfo(t, "attribute values"))
         self.add_button_row([common.build_button("Close", None, self.close)])
         w = min(1200, sum(t.columnWidth(c) for c in range(len(headers))) + 40)
         h = min(800, 22 * (len(rows) + 1) + 120)

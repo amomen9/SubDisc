@@ -19,7 +19,7 @@ from ..subgroup_set import SubgroupSet
 from ..target_type import TargetType
 from . import common
 from ..java_compat import double_to_string
-from .table_filter import FilterTableView, ListTableModel
+from .table_filter import FilterInfo, FilterTableView, ListTableModel
 
 F = np.float32
 RESOLUTION = 400
@@ -224,6 +224,9 @@ class ROCCurveWindow(common.Window):
         t.setMaximumHeight(130)
         self._table = t
         self.content().addWidget(t)
+        # counts subgroups, the table itself only lists those on the hull
+        self.content().addWidget(FilterInfo(t, "subgroups", "The picture shows only these.",
+                                            counter=lambda: (len(self._current), len(self._set))))
         self.content().addWidget(self._curve, 1)
         self.add_button_row([common.build_button("GnuPlot", "G", self._gnuplot),
                              common.build_button("Close", "C", self.close)])

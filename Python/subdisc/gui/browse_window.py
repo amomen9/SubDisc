@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QAbstractItemView, QComboBox
 from .. import log
 from ..attribute_type import AttributeType
 from . import common
-from .table_filter import FilterSortModel, FilterTableView, match, parse_number, sort_key
+from .table_filter import FilterInfo, FilterSortModel, FilterTableView, match, parse_number, sort_key
 
 
 class BrowseTableModel(FilterSortModel):
@@ -102,8 +102,13 @@ class BrowseTableModel(FilterSortModel):
         vals = c.floats_view()[:n][rows].astype(np.float64)
         tn = parse_number(text)
         if op in ("include", "exclude") or tn is None:
-            keep = np.array([match(float(v), common.number(v), op, text) for v in vals], dtype=bool)
-            return rows[keep] if rows.size else rows
+            # compares the text as shown: format every distinct number one
+            # time, not every row (a column has far fewer values than rows)
+            if not rows.size:
+                return rows
+            uniq, inv = np.unique(vals, return_inverse=True)
+            lut = np.array([match(float(u), common.number(u), op, text) for u in uniq], dtype=bool)
+            return rows[lut[inv.reshape(-1)]]
         with np.errstate(invalid="ignore"):
             if op == "=":
                 keep = np.abs(vals - tn) < 5e-7   # as shown, 6 decimals
@@ -148,7 +153,12 @@ class BrowseTableModel(FilterSortModel):
             return sorted(c.get_domain(), key=str.lower)[:limit]
         if c.get_type() == AttributeType.BINARY:
             return ["0", "1", "?"]
-        return []
+        # numeric: the distinct values, when there are not too many
+        n = c.size()
+        uniq = np.unique(c.floats_view()[:n])
+        if uniq.size > limit:
+            return []
+        return [common.number(u) for u in uniq if u == u]
 
     def visible_mask(self):
         """the rows shown, as a mask over the table"""
@@ -200,6 +210,7 @@ class BrowseWindow(common.Window):
         self._members = None
         self._jtable = BrowseJTable(table, subgroup)
         self.content().addWidget(self._jtable, 1)
+        self.content().addWidget(FilterInfo(self._jtable, "rows", "Save writes only these."))
 
         self._map = {}
         for i in range(table.get_nr_columns()):

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QHBoxLayout,
 from .. import log
 from ..attribute_type import AttributeType
 from . import common
-from .table_filter import FilterSortModel, FilterTableView
+from .table_filter import FilterInfo, FilterSortModel, FilterTableView
 
 HEADER = ("Attribute", "Cardinality", "Type", "Enabled", "Missing Values")
 
@@ -87,6 +87,7 @@ class MetaDataWindow(common.Window):
         self._view.fit_headings()
         self._view.horizontalHeader().setStretchLastSection(True)
         self.content().addWidget(self._view, 1)
+        self.content().addWidget(FilterInfo(self._view, "attributes", "The Select buttons only pick shown rows."))
 
         actions = QHBoxLayout()
         # selection
