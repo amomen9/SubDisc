@@ -2,6 +2,7 @@
 Pattern Team, ROC, Save, Print and the p-value buttons. Also the
 PatternTeamTabWindow (one tab per pattern team group)."""
 
+import copy
 import os
 import time
 
@@ -135,7 +136,8 @@ class ResultWindow(common.Window):
         self.content().addWidget(self._view, 1)
         # 'Showing 5 of 16 subgroups ...', only while a filter is on
         self._filter_info = FilterInfo(self._view, "subgroups",
-                                       "ROC, Pattern Team, Save, Print and the p-values use only these.")
+                                       "ROC, Pattern Team, Save, Print, the p-values and the buttons of the "
+                                       "last row use only these.")
         self.content().addWidget(self._filter_info)
         self._model.filtersChanged.connect(self._filters_changed)
         if len(self._model.items()) > 0:
@@ -155,7 +157,17 @@ class ResultWindow(common.Window):
         self._empirical = common.build_button("Empirical p-Values", "E", self._empirical_clicked)
         self.add_button_row([self._pattern_team, self._roc, self._save, self._print,
                              self._p_values, self._regression, self._empirical])
+        # not in java, see NEW_FEATURES.md
+        self._subgroup_list = common.build_button("Subgroup List", "L", self._subgroup_list_clicked)
+        self._holdout = common.build_button("Holdout Test", "O", self._holdout_clicked)
+        self._stability = common.build_button("Stability", "Y", self._stability_clicked)
+        self._multiple_testing = common.build_button("Multiple Testing", "U", self._multiple_testing_clicked)
+        self.add_button_row([self._subgroup_list, self._holdout, self._stability, self._multiple_testing])
         self.add_button_row([common.build_button("Close", "C", self.close)])
+        # the mining window keeps changing its SearchParameters, the new
+        # buttons work with the settings of this run
+        self._sp_run = copy.copy(self._sp)
+        self._sp_run.set_target_concept(copy.copy(self._sp.get_target_concept()))
         self._enable_buttons_check()
 
         QShortcut(QKeySequence(Qt.Key_Return), self._view, self._enter, context=Qt.WidgetShortcut)
@@ -190,6 +202,8 @@ class ResultWindow(common.Window):
                 s.append(str(tc.get_target_value()))
             else:
                 s.append(tc.get_secondary_target().get_name())
+        if tt == TargetType.SURVIVAL:
+            s.append("; time = %s; event = %s" % (tc.get_primary_target().get_name(), tc.get_secondary_target().get_name()))
         s.append("; quality measure = " + self._sp.get_quality_measure().GUI_TEXT)
         je = self._set.get_joint_entropy()
         if je == je:
@@ -199,12 +213,14 @@ class ResultWindow(common.Window):
     def _enable_buttons_check(self):
         if len(self._set) == 0:
             for b in (self._show_model, self._roc, self._pattern_team, self._browse, self._delete,
-                      self._p_values, self._regression, self._empirical, self._save, self._print):
+                      self._p_values, self._regression, self._empirical, self._save, self._print,
+                      self._subgroup_list, self._holdout, self._stability, self._multiple_testing):
                 b.setEnabled(False)
             return
         tt = self._sp.get_target_type()
         self._show_model.setVisible(TargetType.has_base_model(tt))
         self._roc.setVisible(tt == TargetType.SINGLE_NOMINAL)
+        self._subgroup_list.setEnabled(tt in (TargetType.SINGLE_NOMINAL, TargetType.SINGLE_NUMERIC))
 
     def _selected_rows(self):
         """source rows (positions in the set) of the selected table rows"""
@@ -262,6 +278,8 @@ class ResultWindow(common.Window):
                 self._show_multi_label()
             elif tt == TargetType.LABEL_RANKING:
                 self._show_label_ranking(sel)
+            elif tt == TargetType.SURVIVAL:
+                self._show_survival(sel)
             else:
                 raise AssertionError(tt)
         finally:
@@ -346,6 +364,56 @@ class ResultWindow(common.Window):
             lrm.print()
             LabelRankingMatrixWindow(self._qm.get_base_label_ranking_matrix(), lrm,
                                      create_title(s) + "   " + s.get_label_ranking().get_ranking())
+
+    def _show_survival(self, sel):
+        from .survival_window import KaplanMeierWindow
+        tc = self._sp_run.get_target_concept()
+        for s in sel:
+            KaplanMeierWindow(tc.get_primary_target(), tc.get_secondary_target(), self._selection,
+                              s.get_members(), create_title(s))
+
+    # ------------------------------------------------------------------
+    # new buttons (not in java), they use the subgroups still shown
+    # ------------------------------------------------------------------
+
+    def _shown_subgroups(self, what):
+        s = self._visible_or_warn(what)
+        return None if s is None else list(s)
+
+    def _subgroup_list_clicked(self):
+        from .subgroup_list_window import open_subgroup_list
+        subgroups = self._shown_subgroups("Subgroup List")
+        if subgroups:
+            open_subgroup_list(self, self._table, self._selection, subgroups, self._sp_run)
+
+    def _holdout_clicked(self):
+        from .feature_common import TestDataChooser
+        from .holdout_window import open_holdout_window
+        subgroups = self._shown_subgroups("Holdout Test")
+        if not subgroups:
+            return
+        choice = TestDataChooser(self, self._table, self._selection).choose()
+        if choice is None:
+            return
+        n = self._table.get_nr_rows()
+        train_rows = n if self._selection is None else int(np.count_nonzero(self._selection[:n]))
+        try:
+            open_holdout_window(self, subgroups, self._sp_run, train_rows, choice)
+        except Exception as e:
+            common.set_busy(False)
+            QMessageBox.warning(self, "Holdout Test", str(e))
+
+    def _stability_clicked(self):
+        from .stability_window import start_stability
+        subgroups = self._shown_subgroups("Stability")
+        if subgroups:
+            start_stability(self, self._table, self._selection, subgroups, self._sp_run)
+
+    def _multiple_testing_clicked(self):
+        from .multiple_testing_window import open_multiple_testing
+        subgroups = self._shown_subgroups("Multiple Testing")
+        if subgroups:
+            open_multiple_testing(self, self._table, self._selection, subgroups, self._sp_run, self._sd)
 
     # ------------------------------------------------------------------
     # other buttons
