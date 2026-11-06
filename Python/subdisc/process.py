@@ -28,37 +28,14 @@ def run_subgroup_discovery(table, fold, selection, search_parameters, show_windo
     if not TargetType.is_implemented(tt):
         return None
 
-    if tt == TargetType.SINGLE_NOMINAL:
-        # recompute, cross-validation or a selection may give a smaller number
-        tc = search_parameters.get_target_concept()
-        positives = tc.get_primary_target().count_values(tc.get_target_value(), selection)
-        sd = SubgroupDiscovery.single_nominal(search_parameters, table, selection, positives, main_window)
-    elif tt == TargetType.SINGLE_NUMERIC:
+    if tt == TargetType.SINGLE_NUMERIC:
         if CAUC_HEAVY:
             _cauc_heavy(table, fold, selection, search_parameters, show_windows, nr_threads)
             return None
         elif sdm.TEMPORARY_CODE:
             _temporary_code(table, selection, search_parameters)
             return None
-        avg = search_parameters.get_target_concept().get_primary_target().get_average(selection)
-        from .java_compat import float_to_string
-        log.log_command_line("average: " + float_to_string(avg))
-        sd = SubgroupDiscovery.single_numeric(search_parameters, table, selection, avg, main_window)
-    elif tt == TargetType.MULTI_NUMERIC:
-        sd = SubgroupDiscovery.multi_numeric(table, selection, main_window, search_parameters)
-    elif tt == TargetType.MULTI_LABEL:
-        sd = SubgroupDiscovery.multi_label(search_parameters, table, selection, main_window)
-    elif tt == TargetType.DOUBLE_REGRESSION:
-        sd = SubgroupDiscovery.double_target(search_parameters, table, selection, True, main_window)
-    elif tt in (TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY):
-        # DOUBLE_BINARY is passed as if correlation
-        sd = SubgroupDiscovery.double_target(search_parameters, table, selection, False, main_window)
-    elif tt == TargetType.SCAPE:
-        sd = SubgroupDiscovery.scape(main_window, search_parameters, table, selection)
-    elif tt == TargetType.LABEL_RANKING:
-        sd = SubgroupDiscovery.label_ranking(search_parameters, main_window, table, selection)
-    else:
-        raise AssertionError("Process: TargetType '%s' not implemented" % tt)
+    sd = create_subgroup_discovery(table, selection, search_parameters, main_window)
 
     begin = int(time.time() * 1000)
     sd.mine(int(time.time() * 1000), nr_threads)
@@ -85,6 +62,42 @@ def run_subgroup_discovery(table, fold, selection, search_parameters, show_windo
         _cauc_light(sd, selection)
     if ROC_BEAM_TEST and tt == TargetType.SINGLE_NOMINAL:
         sd.get_result().get_roc_list()
+    return sd
+
+
+def create_subgroup_discovery(table, selection, search_parameters, main_window=None):
+    """The SubgroupDiscovery for the target type, ready to mine (split off
+    run_subgroup_discovery so the holdout code can score subgroups on other
+    rows with the same setup)."""
+    from .subgroup_discovery import SubgroupDiscovery
+    tt = search_parameters.get_target_concept().get_target_type()
+    if tt == TargetType.SINGLE_NOMINAL:
+        # recompute, cross-validation or a selection may give a smaller number
+        tc = search_parameters.get_target_concept()
+        positives = tc.get_primary_target().count_values(tc.get_target_value(), selection)
+        sd = SubgroupDiscovery.single_nominal(search_parameters, table, selection, positives, main_window)
+    elif tt == TargetType.SINGLE_NUMERIC:
+        avg = search_parameters.get_target_concept().get_primary_target().get_average(selection)
+        from .java_compat import float_to_string
+        log.log_command_line("average: " + float_to_string(avg))
+        sd = SubgroupDiscovery.single_numeric(search_parameters, table, selection, avg, main_window)
+    elif tt == TargetType.MULTI_NUMERIC:
+        sd = SubgroupDiscovery.multi_numeric(table, selection, main_window, search_parameters)
+    elif tt == TargetType.MULTI_LABEL:
+        sd = SubgroupDiscovery.multi_label(search_parameters, table, selection, main_window)
+    elif tt == TargetType.DOUBLE_REGRESSION:
+        sd = SubgroupDiscovery.double_target(search_parameters, table, selection, True, main_window)
+    elif tt in (TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY):
+        # DOUBLE_BINARY is passed as if correlation
+        sd = SubgroupDiscovery.double_target(search_parameters, table, selection, False, main_window)
+    elif tt == TargetType.SCAPE:
+        sd = SubgroupDiscovery.scape(main_window, search_parameters, table, selection)
+    elif tt == TargetType.LABEL_RANKING:
+        sd = SubgroupDiscovery.label_ranking(search_parameters, main_window, table, selection)
+    elif tt == TargetType.SURVIVAL:
+        sd = SubgroupDiscovery.survival(search_parameters, table, selection, main_window)
+    else:
+        raise AssertionError("Process: TargetType '%s' not implemented" % tt)
     return sd
 
 
