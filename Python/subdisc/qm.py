@@ -124,6 +124,12 @@ class QM(Enum):
     # relative to the ranking loss in the overall dataset, so 0 will do as minimum
     REVERSE_RELATIVE_SUBRANKING_LOSS = (92, "Reverse relative subranking loss", "0.0", TargetType.SCAPE)
 
+    # SURVIVAL quality measures (not in java), see survival.py
+    # 3.84 is the 5% point of a chi-squared with 1 df
+    LOGRANK = (93, "Log-rank test", "3.84", TargetType.SURVIVAL)
+    LOGRANK_WORSE = (94, "Log-rank z (worse survival)", "1.96", TargetType.SURVIVAL)
+    LOGRANK_BETTER = (95, "Log-rank z (better survival)", "1.96", TargetType.SURVIVAL)
+
     @property
     def GUI_TEXT(self):
         return self.value[1]
