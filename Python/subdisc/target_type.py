@@ -16,6 +16,8 @@ class TargetType(Enum):
     MULTI_LABEL = (8, "multi-label")
     MULTI_BINARY_CLASSIFICATION = (9, "multi binary classification")
     LABEL_RANKING = (10, "label ranking")
+    # not in java: time + event indicator, see survival.py
+    SURVIVAL = (11, "survival (time-to-event)")
 
     @property
     def GUI_TEXT(self):
@@ -97,4 +99,5 @@ _FLAGS = {
     TargetType.MULTI_LABEL:                 (True,  False, True,  False, False, False, False, True),
     TargetType.MULTI_BINARY_CLASSIFICATION: (False, False, True,  False, True,  False, False, False),
     TargetType.LABEL_RANKING:               (True,  False, False, False, False, True,  False, True),
+    TargetType.SURVIVAL:                    (True,  True,  False, False, True,  True,  False, True),
 }
