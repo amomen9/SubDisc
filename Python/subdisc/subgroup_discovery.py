@@ -140,6 +140,9 @@ class SubgroupDiscovery:
         self._global_knowledge = None
         self._buffer = None
         self._candidate_count = 0
+        # not in java: candidates per depth, for the multiple testing window
+        self._candidate_count_per_depth = {}
+        self._survival = None
         self._skip_count = 0
         self._candidate_queue = None
         self._result = None
@@ -259,6 +262,22 @@ class SubgroupDiscovery:
         sd._targets = search_parameters.get_target_concept().get_multi_targets()
         sd.pdf_nd = ProbabilityDensityFunctionND(list(sd._targets))
         sd._quality_measure = None
+        sd._result = SubgroupSet(search_parameters.get_maximum_subgroups(), selection, table.get_nr_rows())
+        return sd
+
+    @classmethod
+    def survival(cls, search_parameters, table, selection, main_window=None):
+        """not in java: primary target = time, secondary target = event"""
+        from .survival import SurvivalMeasure
+        sd = cls.__new__(cls)
+        sd._base(search_parameters, table, selection, main_window)
+        tc = search_parameters.get_target_concept()
+        sd._primary_column = tc.get_primary_target()
+        sd._secondary_column = tc.get_secondary_target()
+        if sd._primary_column is None or sd._secondary_column is None:
+            raise ValueError("survival needs a time column (target attribute) and an event column (secondary target)")
+        sd._survival = SurvivalMeasure(search_parameters.get_quality_measure(), sd._primary_column,
+                                       sd._secondary_column, selection)
         sd._result = SubgroupSet(search_parameters.get_maximum_subgroups(), selection, table.get_nr_rows())
         return sd
 
@@ -1327,6 +1346,7 @@ class SubgroupDiscovery:
         child.kill_members()
         count = self._candidate_count
         self._candidate_count += 1
+        self._candidate_count_per_depth[depth] = self._candidate_count_per_depth.get(depth, 0) + 1
         if is_valid:
             self._log_candidate_addition(child, count)
 
@@ -1360,6 +1380,8 @@ class SubgroupDiscovery:
             return self._evaluate_multi_label(child)
         if t == TargetType.LABEL_RANKING:
             return self._evaluate_label_ranking(child)
+        if t == TargetType.SURVIVAL:
+            return self._evaluate_survival(child)
         raise AssertionError(t)
 
     def _evaluate_single_nominal(self, child):
@@ -1508,6 +1530,13 @@ class SubgroupDiscovery:
         child.set_label_ranking_matrix(lrm)
         return quality
 
+    def _evaluate_survival(self, child):
+        # not in java, see survival.py
+        quality, hazard_ratio, median = self._survival.evaluate(child.members_view())
+        child.set_secondary_statistic(hazard_ratio)
+        child.set_tertiary_statistic(median)
+        return to_f32(quality)
+
     # ------------------------------------------------------------------
     # info
     # ------------------------------------------------------------------
@@ -1530,6 +1559,13 @@ class SubgroupDiscovery:
 
     def get_candidate_count(self):
         return self._candidate_count
+
+    def get_candidate_count_per_depth(self):
+        """{depth: number of candidates evaluated at that depth}, not in java"""
+        return dict(self._candidate_count_per_depth)
+
+    def get_survival_base(self):
+        return None if self._survival is None else self._survival.base
 
 
 def _i32(x):
