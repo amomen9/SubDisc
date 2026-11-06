@@ -19,6 +19,7 @@ _COL4 = {
     TargetType.SCAPE: "Positives",
     TargetType.MULTI_LABEL: "Edit Distance",
     TargetType.LABEL_RANKING: "Ranking",
+    TargetType.SURVIVAL: "Hazard Ratio",
 }
 
 _COL5 = {
@@ -31,6 +32,7 @@ _COL5 = {
     TargetType.SCAPE: "Negatives",
     TargetType.MULTI_LABEL: "Entropy",
     TargetType.LABEL_RANKING: "",
+    TargetType.SURVIVAL: "Median Time",
 }
 
 
