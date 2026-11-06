@@ -138,7 +138,8 @@ class TargetConcept:
             return self._primary_target is column
         if t in (TargetType.MULTI_NUMERIC, TargetType.MULTI_LABEL):
             return any(c is column for c in self._multi_targets)
-        if t in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE):
+        if t in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE,
+                 TargetType.SURVIVAL):
             return self._primary_target is column or self._secondary_target is column
         raise AssertionError(t)
 
