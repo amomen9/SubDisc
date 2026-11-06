@@ -33,7 +33,12 @@ Data files are the same as for Java: .txt / .csv (comma, tab or semicolon), .arf
 - **subdisc/java_compat.py** the small things that make the numbers come out like in Java: float32 arithmetic, Float.toString / Double.toString, java.util.Random, %f formatting and the like
 - **subdisc/gui/** the windows, one module per Java window (MiningWindow, ResultWindow, BrowseWindow, MetaDataWindow, HistogramWindow, ModelWindow, ROC curve, the dialogs and so on)
 - **subdisc/ui_hooks.py** the places where the Java core pops up a dialog. The core calls these hooks and the GUI fills them in, so the core does not import Qt
-- **tests/** the Java JUnit tests ported to pytest, plus a small GUI test that runs offscreen
+- **tests/** the Java JUnit tests ported to pytest, plus a small GUI test that runs offscreen, plus the tests of the new features
+- **data/** the full UCI Adult data (train and test file) and a made up survival data set, **tools/** the two scripts that make them
+
+## New features
+
+The port can do a few things Java can not: a random holdout split and a holdout test of the subgroups, an MDL subgroup list, multiple testing correction, subsampling stability, model error slicing (where does a classifier go wrong) and a survival (time-to-event) target type. They are in **NEW_FEATURES.md**, together with the sorting and filtering of the tables described below. None of them changes the results of the ported algorithms.
 
 ## The GUI
 
