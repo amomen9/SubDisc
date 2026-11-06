@@ -157,6 +157,12 @@ class MiningWindow(common.Window):
         self._m_remove_domain = self._action("Remove Enrichment Source", "R", self._remove_enrichment_source, False)
         self._m_remove_domain.setEnabled(False)
         e.addAction(self._m_remove_domain)
+        # Tools (not in java, see NEW_FEATURES.md)
+        tl = mb.addMenu(common.with_mnemonic("Tools", "T"))
+        self._m_holdout = self._action("Random Holdout Split...", "H", self._random_holdout_split, False)
+        tl.addAction(self._m_holdout)
+        self._m_model_errors = self._action("Add Model Error Columns...", "M", self._add_model_error_columns, False)
+        tl.addAction(self._m_model_errors)
         # View (not in java: light / dark look)
         v = mb.addMenu(common.with_mnemonic("View", "V"))
         grp = QActionGroup(self)
@@ -405,6 +411,8 @@ class MiningWindow(common.Window):
                 elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION,
                             TargetType.DOUBLE_BINARY, TargetType.SCAPE):
                     misc = tc.get_secondary_target().get_name()
+            if tt == TargetType.SURVIVAL and tc.get_secondary_target() is not None:
+                misc = tc.get_secondary_target().get_name()
         qm_name = sp.get_quality_measure().GUI_TEXT
         qm_min = sp.get_quality_measure_minimum()
         numeric_strategy = sp.get_numeric_strategy()
@@ -461,7 +469,7 @@ class MiningWindow(common.Window):
     def _enable_table_dependent_components(self, on):
         for a in (self._m_browse, self._m_explore, self._m_meta, self._m_subset, self._m_sd,
                   self._m_create_autorun, self._m_add_autorun, self._m_sampled, self._m_cui,
-                  self._m_go, self._m_custom):
+                  self._m_go, self._m_custom, self._m_holdout, self._m_model_errors):
             a.setEnabled(on)
         for b in (self._b_browse, self._b_explore, self._b_meta, self._b_subset, self._b_discretise,
                   self._b_cv, self._b_sd, self._b_sd_loop, self._b_threshold, self._b_multi_targets,
@@ -506,6 +514,12 @@ class MiningWindow(common.Window):
                     self._c_target_attribute.addItem(name)
                 elif at == AttributeType.NUMERIC:
                     self._c_misc_field.addItem(name)
+            if tt == TargetType.SURVIVAL:
+                # time: numeric; event: binary, or numeric with 1 = happened
+                if at == AttributeType.NUMERIC:
+                    self._c_target_attribute.addItem(name)
+                if at in (AttributeType.BINARY, AttributeType.NUMERIC):
+                    self._c_misc_field.addItem(name)
         # multi targets do not change with the primary target
         if tt in (TargetType.MULTI_LABEL, TargetType.MULTI_NUMERIC):
             self._set_multi_targets(tt)
@@ -513,6 +527,13 @@ class MiningWindow(common.Window):
             self._select(self._c_target_attribute, "target")
         elif exists_class:
             self._select(self._c_target_attribute, "class")
+        if tt == TargetType.SURVIVAL:
+            # guess the usual names
+            for want, box in (("time", self._c_target_attribute), ("event", self._c_misc_field),
+                              ("status", self._c_misc_field)):
+                for i in range(box.count()):
+                    if box.itemText(i).lower() == want:
+                        box.setCurrentIndex(i)
 
     def _set_multi_regression_targets(self):
         # assumes COOKS_DISTANCE is only valid for DOUBLE_REGRESSION
@@ -644,6 +665,21 @@ class MiningWindow(common.Window):
         elif tt == TargetType.MULTI_BINARY_CLASSIFICATION:
             info.setText(" target info")
             text.setText("none")
+        elif tt == TargetType.SURVIVAL:
+            p = self._target_concept.get_primary_target()
+            s = self._target_concept.get_secondary_target()
+            info.setText(" events, median time")
+            if p is None or s is None or p is s:
+                text.setText("")
+            else:
+                try:
+                    from ..survival import SurvivalBase
+                    sb = SurvivalBase(p, s, self._selection)
+                    med = sb.median()
+                    text.setText("%d events of %d rows, median %s" % (sb.total_events, sb.size,
+                                                                       "not reached" if med != med else float_to_string(med)))
+                except ValueError as e:
+                    text.setText(str(e))
         else:
             raise AssertionError(tt)
 
@@ -740,6 +776,8 @@ class MiningWindow(common.Window):
             self._l_misc_field.setText("target value")
         elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY):
             self._l_misc_field.setText("<u>s</u>econdary target")
+        elif tt == TargetType.SURVIVAL:
+            self._l_misc_field.setText("event (1 = happened)")
         else:
             self._l_misc_field.setText("")
         # only valid for nominal targets
@@ -767,7 +805,8 @@ class MiningWindow(common.Window):
         self._target_concept.set_primary_target(self._table.get_column(name) if name is not None else None)
         self._search_parameters.set_target_concept(self._target_concept)
         tt = self._target_concept.get_target_type()
-        if tt not in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE):
+        if tt not in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE,
+                      TargetType.SURVIVAL):
             self._init_target_values()
         self._set_multi_regression_targets()
         self._misc_field_changed()
@@ -777,7 +816,8 @@ class MiningWindow(common.Window):
         misc = self._misc_field_name()
         if tt in (TargetType.SINGLE_NOMINAL, TargetType.MULTI_BINARY_CLASSIFICATION):
             self._target_concept.set_target_value(misc)
-        elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE):
+        elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.SCAPE,
+                    TargetType.SURVIVAL):
             self._target_concept.set_secondary_target(self._table.get_column(misc) if misc is not None else None)
         elif tt == TargetType.SINGLE_ORDINAL:
             raise AssertionError(tt)
@@ -935,6 +975,37 @@ class MiningWindow(common.Window):
         self._init_gui_components_data_set(False)
         self._init_target_info()
 
+    def _random_holdout_split(self):
+        # not in java
+        from .model_error_dialog import ask_holdout_split
+        train = ask_holdout_split(self, self._table)
+        if train is None:
+            return
+        self._selection = train
+        n = self._table.get_nr_rows()
+        print("holdout split: %d train rows, %d test rows" % (int(np.count_nonzero(train)), n - int(np.count_nonzero(train))))
+        self._init_gui_components_data_set(False)
+        self._init_target_info()
+
+    def _add_model_error_columns(self):
+        # not in java
+        from .model_error_dialog import ask_model_errors
+        tc = self._target_concept
+        target = self._target_attribute_name() if tc.get_target_type() == TargetType.SINGLE_NOMINAL else None
+        value = self._misc_field_name() if target is not None else None
+        res = ask_model_errors(self, self._table, target, value)
+        if res is None:
+            return
+        new, _target, _value = res
+        self.update_table()
+        # mine where the model is wrong: single nominal, <prefix>error = 1
+        self._select(self._c_target_type, TargetType.SINGLE_NOMINAL.GUI_TEXT)
+        self._target_type_changed()
+        self._select(self._c_target_attribute, new[1])
+        self._target_attribute_changed()
+        self._select(self._c_misc_field, "1")
+        self._misc_field_changed()
+
     def _discretise(self):
         from .discretise import discretise_all
         discretise_all(self._table, self._target_concept)
@@ -1008,6 +1079,9 @@ class MiningWindow(common.Window):
                 lr = col.get_average_ranking(None)   # over the entire data set
                 lrm = col.get_average_ranking_matrix(None)
                 LabelRankingMatrixWindow(lrm, None, "   " + lr.get_ranking())
+            elif tt == TargetType.SURVIVAL:
+                from .survival_window import KaplanMeierWindow
+                KaplanMeierWindow(tc.get_primary_target(), tc.get_secondary_target(), self._selection, None, BASE_MODEL_TEXT)
             else:
                 raise AssertionError(tt)
         except Exception as e:
@@ -1097,7 +1171,8 @@ class MiningWindow(common.Window):
         elif tt == TargetType.MULTI_NUMERIC:
             QMessageBox.information(self, "Multi Numeric Error", "Not implemented yet!")
             return
-        elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY):
+        elif tt in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY,
+                    TargetType.SURVIVAL):
             qm = None
         elif tt == TargetType.SCAPE:
             qm = QualityMeasure(sp.get_quality_measure(), t.get_nr_rows(), self._positive_count,
