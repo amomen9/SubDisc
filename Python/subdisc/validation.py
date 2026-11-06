@@ -62,7 +62,7 @@ class Validation:
     def is_valid_random_qualities_target_type(t):
         return t in (TargetType.SINGLE_NOMINAL, TargetType.SINGLE_NUMERIC, TargetType.DOUBLE_REGRESSION,
                      TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY, TargetType.MULTI_LABEL,
-                     TargetType.LABEL_RANKING)
+                     TargetType.LABEL_RANKING, TargetType.SURVIVAL)
 
     def get_random_qualities(self, for_subgroups, nr_repetitions):
         min_cov = self._search_parameters.get_minimum_coverage()
@@ -81,6 +81,8 @@ class Validation:
             return self._multi_label(for_subgroups, nr_repetitions, min_cov, rnd, depth)
         if t == TargetType.LABEL_RANKING:
             return self._label_ranking(for_subgroups, nr_repetitions, min_cov, rnd, depth)
+        if t == TargetType.SURVIVAL:
+            return self._survival(for_subgroups, nr_repetitions, min_cov, rnd, depth)
         raise AssertionError(t)
 
     def _next(self, for_subgroups, min_cov, rnd, depth):
@@ -153,6 +155,17 @@ class Validation:
             idx = np.flatnonzero(sg.members_view()[:p.size()])
             cm.add_observations(p.floats_view()[idx], s.floats_view()[idx])
             out.append(cm.get_evaluation_measure_value())
+        return out
+
+    def _survival(self, for_subgroups, reps, min_cov, rnd, depth):
+        # not in java
+        from .survival import SurvivalMeasure
+        sm = SurvivalMeasure(self._search_parameters.get_quality_measure(), self._target_concept.get_primary_target(),
+                             self._target_concept.get_secondary_target(), self._selection)
+        out = []
+        for _ in range(reps):
+            sg = self._next(for_subgroups, min_cov, rnd, depth)
+            out.append(sm.evaluate(sg.members_view())[0])
         return out
 
     def _multi_label(self, for_subgroups, reps, min_cov, rnd, depth):
@@ -257,6 +270,15 @@ class Validation:
             sc = tc.get_secondary_target().copy()
             reg = t == TargetType.DOUBLE_REGRESSION
             loop(lambda: SubgroupDiscovery.double_target(sp, table, sel, reg, None))
+            tc.set_primary_target(pc)
+            cols[pc.get_index()] = pc
+            tc.set_secondary_target(sc)
+            cols[sc.get_index()] = sc
+        elif t == TargetType.SURVIVAL:
+            # not in java, time and event are permuted together
+            pc = tc.get_primary_target().copy()
+            sc = tc.get_secondary_target().copy()
+            loop(lambda: SubgroupDiscovery.survival(sp, table, sel, None))
             tc.set_primary_target(pc)
             cols[pc.get_index()] = pc
             tc.set_secondary_target(sc)
