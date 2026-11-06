@@ -227,7 +227,9 @@ class Table:
             raise ValueError("Table.swapRandomizeTarget(): !Validation.isValidRandomQualitiesTargetType(%s)" % t)
         if t in (TargetType.SINGLE_NOMINAL, TargetType.SINGLE_NUMERIC, TargetType.LABEL_RANKING):
             targets = [tc.get_primary_target()]
-        elif t in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY):
+        elif t in (TargetType.DOUBLE_REGRESSION, TargetType.DOUBLE_CORRELATION, TargetType.DOUBLE_BINARY,
+                   TargetType.SURVIVAL):
+            # survival: time and event move together, so pairs stay intact
             targets = [tc.get_primary_target(), tc.get_secondary_target()]
         elif t == TargetType.MULTI_LABEL:
             targets = tc.get_multi_targets()
